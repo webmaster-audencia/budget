@@ -4,8 +4,9 @@ import { Filters } from './components/Filters';
 import { KpiCards } from './components/KpiCards';
 import { ProgressSection } from './components/ProgressSection';
 import { CommentSection } from './components/CommentSection';
+import { DetailTable } from './components/DetailTable';
 import { exportNodeToPdf } from './exportPdf';
-import type { BudgetResponse, BudgetView } from './types';
+import type { BudgetResponse, BudgetView, DetailRow } from './types';
 import { formatDateFr } from './format';
 
 type LoadState =
@@ -13,18 +14,14 @@ type LoadState =
   | { kind: 'error'; message: string; status?: number }
   | { kind: 'ready'; data: BudgetResponse };
 
-const STORAGE_KEY = 'audencia-budget-comments-v1';
+const STORAGE_KEY = 'audencia-budget-comments-v2';
 
 function App() {
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   const [activeView, setActiveView] = useState<string>('Global');
   const [comments, setComments] = useState<Record<string, string>>(() => {
-    try {
-      const raw = sessionStorage.getItem(STORAGE_KEY);
-      return raw ? JSON.parse(raw) : {};
-    } catch {
-      return {};
-    }
+    try { return JSON.parse(sessionStorage.getItem(STORAGE_KEY) ?? '{}'); }
+    catch { return {}; }
   });
   const [exporting, setExporting] = useState(false);
   const exportRef = useRef<HTMLDivElement>(null);
@@ -34,10 +31,7 @@ function App() {
       .then(async (r) => {
         if (!r.ok) {
           const body = await r.json().catch(() => ({}));
-          throw Object.assign(
-            new Error(body.message || `Erreur HTTP ${r.status}`),
-            { status: r.status }
-          );
+          throw Object.assign(new Error(body.message || `Erreur HTTP ${r.status}`), { status: r.status });
         }
         return r.json() as Promise<BudgetResponse>;
       })
@@ -48,12 +42,11 @@ function App() {
   }, []);
 
   useEffect(() => {
-    try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(comments));
-    } catch {
-      /* sessionStorage indisponible : silencieux */
-    }
+    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(comments)); }
+    catch { /* indisponible */ }
   }, [comments]);
+
+  const serviceNames = state.kind === 'ready' ? state.data.services.map((s) => s.name) : [];
 
   const currentView: BudgetView | null = useMemo(() => {
     if (state.kind !== 'ready') return null;
@@ -61,17 +54,22 @@ function App() {
     return state.data.services.find((s) => s.name === activeView) ?? state.data.global;
   }, [state, activeView]);
 
-  const serviceNames = state.kind === 'ready' ? state.data.services.map((s) => s.name) : [];
+  const currentDetails: DetailRow[] = useMemo(() => {
+    if (state.kind !== 'ready') return [];
+    if (activeView === 'Global') return state.data.details;
+    return state.data.details.filter((r) => r.service === activeView);
+  }, [state, activeView]);
+
+  const isGlobal = activeView === 'Global';
 
   async function handleExport() {
     if (!exportRef.current || !currentView) return;
     setExporting(true);
     try {
-      // léger délai pour laisser React mettre à jour le DOM (mode readonly)
-      await new Promise((r) => setTimeout(r, 60));
+      await new Promise((r) => setTimeout(r, 80));
       const date = new Date().toISOString().slice(0, 10);
-      const safeName = currentView.name.replace(/\s+/g, '_').replace(/[^\w\-éèêàùç]/gi, '');
-      await exportNodeToPdf(exportRef.current, `Audencia_Budget_${safeName}_${date}.pdf`);
+      const safe = currentView.name.replace(/\s+/g, '_').replace(/[^\w\-]/g, '');
+      await exportNodeToPdf(exportRef.current, `Audencia_Budget_${safe}_${date}.pdf`);
     } catch (e) {
       console.error('Export PDF :', e);
       alert("L'export PDF a échoué. Voir la console pour le détail.");
@@ -85,6 +83,7 @@ function App() {
       <Header />
       <main className="main">
         <div className="main-inner">
+
           {state.kind === 'loading' && (
             <div className="state-card">
               <div className="spinner" />
@@ -98,13 +97,12 @@ function App() {
               <h3>Impossible de charger les données</h3>
               <p>
                 {state.status === 404
-                  ? <>Le fichier Excel est introuvable.</>
-                  : <>Le serveur n'a pas pu agréger le fichier Excel.</>}
+                  ? 'Le fichier Excel est introuvable.'
+                  : "Le serveur n'a pas pu lire le fichier Excel."}
               </p>
               <p>
-                Vérifiez qu'un fichier <code>.xlsx</code> est bien placé dans le dossier{' '}
-                <code>/data</code> à la racine du projet, et que le serveur backend tourne sur{' '}
-                <code>localhost:4000</code>.
+                Vérifiez qu'un fichier <code>.xlsx</code> est dans le dossier <code>/data</code>{' '}
+                et que le backend tourne sur <code>localhost:4000</code>.
               </p>
               <div className="state-error">{state.message}</div>
             </div>
@@ -112,31 +110,31 @@ function App() {
 
           {state.kind === 'ready' && currentView && (
             <>
-              <Filters
-                services={serviceNames}
-                active={activeView}
-                onChange={setActiveView}
-              />
+              <Filters services={serviceNames} active={activeView} onChange={setActiveView} />
 
               {state.data.warnings.length > 0 && (
                 <div className="warnings no-print">
                   <strong>Avertissements d'extraction :</strong>
                   <ul>
-                    {state.data.warnings.map((w, i) => (
-                      <li key={i}>{w}</li>
-                    ))}
+                    {state.data.warnings.map((w, i) => <li key={i}>{w}</li>)}
                   </ul>
                 </div>
               )}
 
+              {/* Zone capturée pour le PDF */}
               <div ref={exportRef}>
-                <div className="view-title">
-                  <h2>
-                    {activeView === 'Global'
-                      ? 'Vue globale – Budget marketing'
-                      : `Service : ${currentView.name}`}
-                  </h2>
-                  <span className="subtitle">{formatDateFr()}</span>
+                <div className="view-header">
+                  <div className="view-title-wrap">
+                    <div className="view-eyebrow">Direction Communication & Marketing</div>
+                    <h2 className="view-title">
+                      {isGlobal ? (
+                        <>Vue <span className="highlight">globale</span> — Budget marketing</>
+                      ) : (
+                        <>Service : <span className="highlight">{currentView.name}</span></>
+                      )}
+                    </h2>
+                  </div>
+                  <span className="view-date">{formatDateFr()}</span>
                 </div>
 
                 <KpiCards view={currentView} />
@@ -144,11 +142,10 @@ function App() {
                 <CommentSection
                   viewName={currentView.name}
                   value={comments[currentView.name] ?? ''}
-                  onChange={(v) =>
-                    setComments((prev) => ({ ...prev, [currentView.name]: v }))
-                  }
+                  onChange={(v) => setComments((prev) => ({ ...prev, [currentView.name]: v }))}
                   readonly={exporting}
                 />
+                <DetailTable rows={currentDetails} isGlobal={isGlobal} />
               </div>
 
               <div className="actions no-print">
@@ -163,7 +160,8 @@ function App() {
               </div>
 
               <div className="footer no-print">
-                Fichier source : {state.data.file} – {state.data.stats.rowsKept} lignes retenues, {state.data.stats.rowsIgnored} ignorées.
+                Fichier source : {state.data.file} — {state.data.stats.rowsKept} lignes retenues
+                sur {state.data.stats.budgetSheetsDetected} onglet(s) budget détecté(s).
               </div>
             </>
           )}

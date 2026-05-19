@@ -14,12 +14,12 @@ export function CommentSection({ viewName, value, onChange, readonly }: Props) {
       </div>
       {readonly ? (
         <div className={`comment-readonly ${value.trim() === '' ? 'empty' : ''}`}>
-          {value.trim() === '' ? 'Aucun commentaire saisi pour cette vue.' : value}
+          {value.trim() === '' ? 'Aucun commentaire pour cette vue.' : value}
         </div>
       ) : (
         <textarea
           className="comment-textarea"
-          placeholder={`Saisir un commentaire pour la vue « ${viewName} » (visible dans l'export PDF)`}
+          placeholder={`Commentaire libre pour la vue « ${viewName} » (inclus dans le PDF)`}
           value={value}
           onChange={(e) => onChange(e.target.value)}
         />

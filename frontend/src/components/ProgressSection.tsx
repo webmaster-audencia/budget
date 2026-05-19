@@ -7,21 +7,19 @@ export function ProgressSection({ view }: Props) {
   const { initial, consomme, fleche, reste, engagementRatio, isOverBudget } = view;
   const notCalc = engagementRatio === null;
 
-  // Pour la barre : on calcule des pourcentages capés à 100 cumulés.
-  // Si dépassement, on remplit à 100 % avec consommé + fléché proportionnellement.
   let pctConsomme = 0;
   let pctFleche = 0;
+
   if (!notCalc && initial > 0) {
-    const ratioC = consomme / initial;
-    const ratioF = fleche / initial;
-    const ratioE = ratioC + ratioF; // engagement
-    if (ratioE <= 1) {
-      pctConsomme = ratioC * 100;
-      pctFleche = ratioF * 100;
+    const rc = consomme / initial;
+    const rf = fleche / initial;
+    const re = rc + rf;
+    if (re <= 1) {
+      pctConsomme = rc * 100;
+      pctFleche = rf * 100;
     } else {
-      // dépassement : on étire pour remplir la barre à 100% proportionnellement
-      pctConsomme = (ratioC / ratioE) * 100;
-      pctFleche = (ratioF / ratioE) * 100;
+      pctConsomme = (rc / re) * 100;
+      pctFleche = (rf / re) * 100;
     }
   }
 
@@ -59,28 +57,30 @@ export function ProgressSection({ view }: Props) {
 
       <div className="progress-legend">
         <span className="legend-item">
-          <span className="legend-dot consomme" /> Consommé
+          <span className="legend-dot consomme" />
+          Consommé
           <span className="legend-amount">{formatEUR(consomme)}</span>
         </span>
         <span className="legend-item">
-          <span className="legend-dot fleche" /> Fléché
+          <span className="legend-dot fleche" />
+          Fléché
           <span className="legend-amount">{formatEUR(fleche)}</span>
         </span>
         <span className="legend-item">
-          <span className="legend-dot reste" /> {isOverBudget ? 'Dépassement' : 'Reste'}
+          <span className="legend-dot reste" />
+          {isOverBudget ? 'Dépassement' : 'Reste'}
           <span className="legend-amount">{formatEUR(reste)}</span>
         </span>
       </div>
 
       {isOverBudget && (
         <div className="progress-overflow">
-          Dépassement budgétaire de {formatEUR(reste)} : l'enveloppe initiale est insuffisante.
+          Dépassement budgétaire de {formatEUR(Math.abs(reste))} — l'enveloppe initiale est dépassée.
         </div>
       )}
-
       {notCalc && (
         <div className="progress-uncalc">
-          Avancement non calculable : le budget initial est égal à 0 sur ce périmètre.
+          Avancement non calculable : budget initial égal à 0 sur ce périmètre.
         </div>
       )}
     </section>
