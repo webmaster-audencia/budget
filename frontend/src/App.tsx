@@ -192,8 +192,10 @@ function App() {
               <div className="footer no-print">
                 Source : {state.data.source}
                 {state.data.fileUpdatedAt && ` — fichier daté du ${formatDateFr(new Date(state.data.fileUpdatedAt))}`}
-                {' — '}{state.data.stats.servicesDetected} service(s) · CONSO {state.data.stats.consoRowsKept ?? 0} ligne(s) retenues ·
-                BUDGET {state.data.stats.budgetRowsKept ?? 0} ligne(s) retenues · cache {state.data.cacheUsed ? 'utilisé' : 'mis à jour'}.
+                {' — '}{state.data.stats.servicesDetected} service(s) détecté(s)
+                {' · '}CONSO col.service={state.data.stats.consoColumns?.service ?? '?'}
+                {' · '}BUDGET col.service={state.data.stats.budgetColumns?.service ?? '?'}
+                {' · '}cache {state.data.cacheUsed ? 'utilisé' : 'mis à jour'}.
               </div>
             </>
           )}
