@@ -60,6 +60,9 @@ function normalize(s) {
   return String(s)
     .normalize('NFD')
     .replace(/\p{Diacritic}/gu, '')
+    // Remove zero-width and invisible Unicode chars that can appear in Excel cells
+    .replace(/[​-‍﻿­⁠]/g, '')
+    .replace(/[^\S\n]/g, ' ') // all horizontal whitespace → plain space
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
@@ -213,6 +216,7 @@ function extractConso(ws, warnings, stats) {
   if (cols.service == null) return result;
 
   const unknownServices = new Set();
+  const allServiceRawValues = new Set();
   let parsed = 0;
   let kept = 0;
   let nonNumeric = 0;
@@ -224,6 +228,8 @@ function extractConso(ws, warnings, stats) {
     const serviceRaw = cols.service ? cellValue(row.getCell(cols.service)) : null;
     if (typeof serviceRaw !== 'string' || serviceRaw.trim() === '') return;
     if (isTotalLabel(serviceRaw)) return;
+
+    allServiceRawValues.add(serviceRaw.trim());
 
     const service = matchService(serviceRaw);
     if (!service) {
@@ -281,6 +287,7 @@ function extractConso(ws, warnings, stats) {
 
   stats.consoRowsParsed = parsed;
   stats.consoRowsKept = kept;
+  stats.consoServicesFoundRaw = [...allServiceRawValues].sort();
   return result;
 }
 
@@ -308,6 +315,7 @@ function extractBudget(ws, warnings, stats) {
   }
 
   const unknownServices = new Set();
+  const allServiceRawValues = new Set();
   let parsed = 0;
   let kept = 0;
   let nonNumeric = 0;
@@ -319,6 +327,8 @@ function extractBudget(ws, warnings, stats) {
     const serviceRaw = cellValue(row.getCell(cols.service));
     if (typeof serviceRaw !== 'string' || serviceRaw.trim() === '') return;
     if (isTotalLabel(serviceRaw)) return;
+
+    allServiceRawValues.add(serviceRaw.trim());
 
     const service = matchService(serviceRaw);
     if (!service) { unknownServices.add(serviceRaw.trim()); return; }
