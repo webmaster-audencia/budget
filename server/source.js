@@ -65,9 +65,14 @@ function findLocalDataFile() {
     .readdirSync(DATA_DIR)
     .filter((f) => f.toLowerCase().endsWith('.xlsx') && !f.startsWith('~$'));
   if (all.length === 0) return null;
-  const preferred = 'Essai maquette 2026 AGO_vivi.xlsx';
-  if (all.includes(preferred)) return path.join(DATA_DIR, preferred);
-  return path.join(DATA_DIR, all[0]);
+  // En présence de plusieurs classeurs, on retient le plus récemment modifié
+  // (aucun nom de fichier codé en dur) : déposer une version à jour suffit.
+  return all
+    .map((f) => {
+      const p = path.join(DATA_DIR, f);
+      return { p, mtime: fs.statSync(p).mtimeMs };
+    })
+    .sort((a, b) => b.mtime - a.mtime)[0].p;
 }
 
 function shorten(u) {
