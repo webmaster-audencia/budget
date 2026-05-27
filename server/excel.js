@@ -38,6 +38,7 @@ const AUTHORIZED_SERVICES = [
   'Marketing International',
   'Marketing Entreprise',
   'Com et Marketing transverse',
+  'Com institutionnelle',
 ];
 
 // Variantes connues (normalisées) → nom canonique.
