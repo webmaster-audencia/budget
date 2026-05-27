@@ -206,18 +206,17 @@ function extractConso(ws, warnings, stats) {
     consomme: (n) => n === 'consomme',
     fleche:   (n) => n === 'fleche',
   });
-  // Prefer "Service" column (more granular); fall back to "Pôle" per row when Service is empty.
-  const svcCol  = cols.serviceSvc  ?? null;
-  const poleCol = cols.servicePole ?? null;
+  // If "Service" column exists → use it exclusively (no fallback, empty = row skipped).
+  // If absent → use "Pôle" as the service column (files without a Service column).
+  const serviceCol = cols.serviceSvc ?? cols.servicePole ?? null;
   stats.consoColumns = {
-    service:         letters.serviceSvc  ?? letters.servicePole ?? null,
-    serviceFallback: svcCol != null ? (letters.servicePole ?? null) : null,
+    service:  letters.serviceSvc ?? letters.servicePole ?? null,
     partie: letters.partie, ensemble: letters.ensemble,
     consomme: letters.consomme, fleche: letters.fleche,
   };
   stats.consoHeaderRow = headerRow;
 
-  if (svcCol == null && poleCol == null) {
+  if (serviceCol == null) {
     warnings.push('Onglet CONSO : colonne service (« Service » ou « Pôle ») introuvable. Les valeurs seront ignorées.');
     return result;
   }
@@ -237,11 +236,7 @@ function extractConso(ws, warnings, stats) {
     if (rn <= headerRow) return;
     parsed++;
 
-    // Service column first; fall back to Pôle if empty
-    const svcRaw  = svcCol  ? cellValue(row.getCell(svcCol))  : null;
-    const poleRaw = poleCol ? cellValue(row.getCell(poleCol)) : null;
-    const serviceRaw = (typeof svcRaw === 'string' && svcRaw.trim()) ? svcRaw : poleRaw;
-
+    const serviceRaw = cellValue(row.getCell(serviceCol));
     if (typeof serviceRaw !== 'string' || serviceRaw.trim() === '') return;
     if (isTotalLabel(serviceRaw)) return;
 
@@ -320,17 +315,16 @@ function extractBudget(ws, warnings, stats) {
     servicePole: (n) => n === 'pole',
     budget: (n) => /^b\s?20\d{2}$/.test(n) || n === 'budget' || n === 'budget dedie' || n === 'montant',
   });
-  // Prefer "Service" column; fall back to "Pôle" per row when Service is empty.
-  const svcCol  = cols.serviceSvc  ?? null;
-  const poleCol = cols.servicePole ?? null;
+  // If "Service" column exists → use it exclusively (no fallback, empty = row skipped).
+  // If absent → use "Pôle" as the service column (files without a Service column).
+  const serviceCol = cols.serviceSvc ?? cols.servicePole ?? null;
   stats.budgetColumns = {
-    service:         letters.serviceSvc  ?? letters.servicePole ?? null,
-    serviceFallback: svcCol != null ? (letters.servicePole ?? null) : null,
-    budget: letters.budget,
+    service: letters.serviceSvc ?? letters.servicePole ?? null,
+    budget:  letters.budget,
   };
   stats.budgetHeaderRow = headerRow;
 
-  if (svcCol == null && poleCol == null) {
+  if (serviceCol == null) {
     warnings.push('Onglet BUDGET : colonne service (« Service » ou « Pôle ») introuvable. Aucun budget dédié ne peut être rattaché.');
     return byService;
   }
@@ -348,11 +342,7 @@ function extractBudget(ws, warnings, stats) {
     if (rn <= headerRow) return;
     parsed++;
 
-    // Service column first; fall back to Pôle if empty
-    const svcRaw  = svcCol  ? cellValue(row.getCell(svcCol))  : null;
-    const poleRaw = poleCol ? cellValue(row.getCell(poleCol)) : null;
-    const serviceRaw = (typeof svcRaw === 'string' && svcRaw.trim()) ? svcRaw : poleRaw;
-
+    const serviceRaw = cellValue(row.getCell(serviceCol));
     if (typeof serviceRaw !== 'string' || serviceRaw.trim() === '') return;
     if (isTotalLabel(serviceRaw)) return;
 
