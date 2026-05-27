@@ -6,23 +6,22 @@
  *   - BUDGET : budget dédié par service
  * Tous les autres onglets sont ignorés.
  *
- * Colonnes (résolues par EN-TÊTE, pas par lettre figée, pour rester robuste
- * aux variations de mise en page entre le fichier de démo et le fichier
- * SharePoint cible) :
+ * Colonnes résolues par EN-TÊTE (pas par lettre figée) pour rester robuste
+ * aux variations de mise en page :
  *
- *   CONSO  : Service  ← en-tête « Pôle » (ou « Service »)
+ *   CONSO  : Service  ← en-tête « Service » (sinon « Pôle »)
  *            Partie   ← « Partie »
  *            Ensemble ← « Ensemble »
  *            Consommé ← « CONSOMME »
  *            Fléché   ← « FLECHE »
  *
- *   BUDGET : Service      ← « Pôle » (ou « Service »)
+ *   BUDGET : Service      ← « Service » (sinon « Pôle »)
  *            Budget dédié ← en-tête année « B20xx » (sinon « Budget »)
  *
- * Référence demandée (fichier SharePoint cible) : CONSO Q/U/V + N/O,
- * BUDGET J/K. La résolution par en-tête couvre ces lettres comme la
- * disposition réelle du fichier de démo. Les lettres effectivement
- * retenues sont remontées dans les warnings/stats à des fins de contrôle.
+ * La colonne « Service » est prioritaire sur « Pôle » : si elle existe, elle
+ * est la seule source du service et une ligne sans valeur y est ignorée (pas
+ * de repli sur « Pôle »). « Pôle » ne sert que pour les fichiers dépourvus de
+ * colonne « Service ». Les lettres retenues sont remontées dans stats.
  *
  * Services : liste blanche stricte. Toute valeur hors liste est ignorée.
  */
@@ -60,9 +59,6 @@ function normalize(s) {
   return String(s)
     .normalize('NFD')
     .replace(/\p{Diacritic}/gu, '')
-    // Remove zero-width and invisible Unicode chars that can appear in Excel cells
-    .replace(/[​-‍﻿­⁠]/g, '')
-    .replace(/[^\S\n]/g, ' ') // all horizontal whitespace → plain space
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
@@ -227,7 +223,6 @@ function extractConso(ws, warnings, stats) {
   }
 
   const unknownServices = new Set();
-  const allServiceRawValues = new Set();
   let parsed = 0;
   let kept = 0;
   let nonNumeric = 0;
@@ -239,8 +234,6 @@ function extractConso(ws, warnings, stats) {
     const serviceRaw = cellValue(row.getCell(serviceCol));
     if (typeof serviceRaw !== 'string' || serviceRaw.trim() === '') return;
     if (isTotalLabel(serviceRaw)) return;
-
-    allServiceRawValues.add(serviceRaw.trim());
 
     const service = matchService(serviceRaw);
     if (!service) {
@@ -298,7 +291,6 @@ function extractConso(ws, warnings, stats) {
 
   stats.consoRowsParsed = parsed;
   stats.consoRowsKept = kept;
-  stats.consoServicesFoundRaw = [...allServiceRawValues].sort();
   return result;
 }
 
@@ -333,7 +325,6 @@ function extractBudget(ws, warnings, stats) {
   }
 
   const unknownServices = new Set();
-  const allServiceRawValues = new Set();
   let parsed = 0;
   let kept = 0;
   let nonNumeric = 0;
@@ -345,8 +336,6 @@ function extractBudget(ws, warnings, stats) {
     const serviceRaw = cellValue(row.getCell(serviceCol));
     if (typeof serviceRaw !== 'string' || serviceRaw.trim() === '') return;
     if (isTotalLabel(serviceRaw)) return;
-
-    allServiceRawValues.add(serviceRaw.trim());
 
     const service = matchService(serviceRaw);
     if (!service) { unknownServices.add(serviceRaw.trim()); return; }
@@ -374,7 +363,6 @@ function extractBudget(ws, warnings, stats) {
 
   stats.budgetRowsParsed = parsed;
   stats.budgetRowsKept = kept;
-  stats.budgetServicesFoundRaw = [...allServiceRawValues].sort();
   return byService;
 }
 
