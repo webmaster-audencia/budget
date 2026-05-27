@@ -1,60 +1,76 @@
 /**
- * Audencia – Suivi budgétaire marketing
- * Serveur Express local : lit automatiquement le fichier Excel placé dans /data
- * et expose /api/budget avec les données agrégées par service.
+ * Audencia – Suivi budgétaire marketing.
+ * Serveur Express local. Lit uniquement les onglets CONSO et BUDGET du fichier
+ * Excel (SharePoint si configuré, sinon fallback local), agrège côté serveur,
+ * met le résultat en cache mémoire et expose /api/budget.
  */
-const path = require('path');
-const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
-const { extractBudget } = require('./excel');
-
+const { loadData, probeVersion, resolveSource } = require('./source');
+const { aggregate } = require('./excel');
 
 const PORT = process.env.PORT || 4000;
-const DATA_DIR = path.resolve(__dirname, '..', 'data');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-function findExcelFile() {
-  if (!fs.existsSync(DATA_DIR)) return null;
-  const preferred = 'Essai maquette 2026 AGO_vivi.xlsx';
-  const all = fs.readdirSync(DATA_DIR).filter(f => f.toLowerCase().endsWith('.xlsx') && !f.startsWith('~$'));
-  if (all.includes(preferred)) return path.join(DATA_DIR, preferred);
-  if (all.length > 0) return path.join(DATA_DIR, all[0]);
-  return null;
+// Cache mémoire : { version, payload }
+let cache = null;
+
+async function getBudget() {
+  // Étape rapide : version sans parsing. Si inchangée → cache HIT immédiat.
+  const probed = await probeVersion();
+  if (cache && probed && cache.version === probed) {
+    console.log('[budget] cache HIT (version inchangée) — pas de relecture Excel');
+    return { ...cache.payload, cacheUsed: true };
+  }
+
+  const data = await loadData();
+  const { label, version, fetchMs, fileUpdatedAt } = data;
+  const { global, services, warnings, stats } = aggregate(data);
+
+  console.log(
+    `[budget] Excel parsed in ${fetchMs}ms — ${stats.sheetsUsed.length} sheets used ` +
+      `(${stats.sheetsUsed.join(', ') || 'none'}) — CONSO ${stats.consoRowsKept || 0}/${stats.consoRowsParsed || 0} kept, ` +
+      `BUDGET ${stats.budgetRowsKept || 0}/${stats.budgetRowsParsed || 0} kept — ` +
+      `${stats.servicesDetected} services — aggregated in ${stats.aggregationMs}ms — cache updated`
+  );
+
+  const payload = {
+    source: label,
+    fileUpdatedAt,
+    generatedAt: new Date().toISOString(),
+    global,
+    services,
+    warnings,
+    stats,
+    cacheUsed: false,
+  };
+  cache = { version, payload };
+  return payload;
 }
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, time: new Date().toISOString() });
+  res.json({ ok: true, time: new Date().toISOString(), source: resolveSource().label || 'none' });
 });
 
 app.get('/api/budget', async (req, res) => {
   try {
-    const file = findExcelFile();
-    if (!file) {
-      return res.status(404).json({
-        error: 'FILE_NOT_FOUND',
-        message: `Aucun fichier Excel trouvé dans ${DATA_DIR}. Placez "Essai maquette 2026 AGO_vivi.xlsx" dans le dossier /data.`,
-      });
-    }
-    const result = await extractBudget(file);
-    res.json({
-      file: path.basename(file),
-      generatedAt: new Date().toISOString(),
-      ...result,
-    });
+    const payload = await getBudget();
+    res.json(payload);
   } catch (err) {
-    console.error('[budget] erreur lecture/agrégation :', err);
-    res.status(500).json({
-      error: 'EXTRACTION_ERROR',
+    console.error('[budget] erreur :', err);
+    const status = err.code === 'FILE_NOT_FOUND' || err.code === 'NO_SOURCE' ? 404 : 500;
+    res.status(status).json({
+      error: err.code || 'EXTRACTION_ERROR',
       message: err.message || 'Erreur inconnue lors de la lecture du fichier Excel.',
     });
   }
 });
 
 app.listen(PORT, () => {
+  const src = resolveSource();
   console.log(`\n  Audencia – serveur budget prêt sur http://localhost:${PORT}`);
-  console.log(`  Dossier data surveillé : ${DATA_DIR}\n`);
+  console.log(`  Source : ${src.label || 'aucune (placez un .xlsx dans /data ou définissez BUDGET_FILE_PATH)'}\n`);
 });

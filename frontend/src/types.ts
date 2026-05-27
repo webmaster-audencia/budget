@@ -1,46 +1,52 @@
-export interface BudgetView {
-  name: string;
-  initial: number;
+export interface DetailRow {
+  service: string;
+  partie: string;
+  ensemble: string;
+  detailLabel: string;
   consomme: number;
   fleche: number;
-  reste: number;
-  engagementRatio: number | null;
-  isOverBudget: boolean;
-  rowsCount: number;
+  sourceRows: number;
+  resteADepenser: number | null; // null = non ventilable au niveau ligne
 }
 
-export interface DetailRow {
-  sheet: string;
-  rowNum: number;
+export interface ServiceView {
   service: string;
-  budgetInitial: number;
-  budgetConsomme: number;
-  budgetFleche: number;
+  budgetDedie: number;
+  consomme: number;
+  fleche: number;
   resteADepenser: number;
+  avancement: number | null;
+  isOverBudget: boolean;
+  lignesDetail: DetailRow[];
 }
 
-export interface SheetStat {
-  name: string;
-  kept: number;
-  ignored: number;
-  empty: boolean;
-  skipped: boolean;
+export interface GlobalView {
+  budgetDedie: number;
+  consomme: number;
+  fleche: number;
+  resteADepenser: number;
+  avancement: number | null;
+  isOverBudget: boolean;
 }
 
 export interface BudgetResponse {
-  file: string;
+  source: string;
+  fileUpdatedAt: string | null;
   generatedAt: string;
-  global: BudgetView;
-  services: BudgetView[];
-  details: DetailRow[];
+  global: GlobalView;
+  services: ServiceView[];
   warnings: string[];
+  cacheUsed: boolean;
   stats: {
-    rowsKept: number;
-    rowsIgnored: number;
-    budgetSheetsDetected: number;
-    sheets: SheetStat[];
-    outlineLevel1Total: number;
-    outlineLevel1Kept: number;
-    outlineLevelFallback: boolean;
+    consoRowsParsed?: number;
+    consoRowsKept?: number;
+    budgetRowsParsed?: number;
+    budgetRowsKept?: number;
+    consoColumns?: Record<string, string | null>;
+    budgetColumns?: Record<string, string | null>;
+    sheetsUsed: string[];
+    sheetsIgnored: string[];
+    servicesDetected: number;
+    aggregationMs?: number;
   };
 }

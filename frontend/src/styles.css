@@ -41,7 +41,9 @@
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
-  font-family: 'Sora', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  /* Charte Audencia : Avenir si disponible (licence/poste), sinon Sora (Google
+     Fonts), puis fallback sans-serif système propre. */
+  font-family: 'Avenir Next', 'Avenir', 'Sora', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
   background: var(--beige);
   color: var(--navy);
   -webkit-font-smoothing: antialiased;
@@ -702,6 +704,60 @@ table.detail-table tr.grand-total td {
   border-top: 1px solid var(--border);
   margin-top: 16px;
 }
+
+/* ======================================================================
+   LOGO
+   ====================================================================== */
+.brand-logo {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  display: block;
+}
+
+.view-brand-pdf { display: flex; align-items: center; }
+.pdf-logo { width: 46px; height: 46px; display: block; }
+
+/* ======================================================================
+   TABLEAU – éléments ajoutés (détail Partie+Ensemble, accordéon)
+   ====================================================================== */
+.detail-hint {
+  font-size: 12px;
+  color: #6b8098;
+  margin: -8px 0 16px;
+  line-height: 1.5;
+}
+
+.muted { color: #aab8c4; }
+table.detail-table td.muted { color: #aab8c4; }
+
+.detail-label { color: var(--navy); font-weight: 500; }
+.detail-svc { color: #4a6070; font-size: 12.5px; }
+
+.src-count { color: #a0b4bf; font-size: 11px; margin-left: 4px; }
+
+.group-chevron {
+  display: inline-block;
+  width: 16px;
+  color: var(--blue);
+  font-size: 11px;
+}
+.group-count {
+  float: right;
+  font-weight: 500;
+  font-size: 11px;
+  color: #6b8098;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* warnings repliables */
+.warnings summary {
+  cursor: pointer;
+  list-style: revert;
+}
+.warnings summary strong { color: var(--navy); }
 
 /* ======================================================================
    EXPORT PDF – masquage des éléments non imprimables

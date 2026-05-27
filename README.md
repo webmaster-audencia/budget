@@ -1,11 +1,12 @@
 # Audencia – Suivi budgétaire marketing
 
-Application web locale qui lit automatiquement un classeur Excel placé dans
-`/data`, agrège les données budgétaires par service marketing et les affiche
-dans un dashboard sobre, institutionnel, exportable en PDF.
+Application web locale qui lit un classeur Excel budgétaire (SharePoint si
+configuré, sinon fichier local), agrège les données par service marketing et les
+affiche dans un dashboard sobre, institutionnel, exportable en PDF — à la charte
+Audencia.
 
 - **Frontend** : React + Vite + TypeScript
-- **Backend**  : Node.js + Express + ExcelJS
+- **Backend**  : Node.js + Express + ExcelJS (lecture en streaming)
 - **Export**   : PDF généré côté navigateur (html2canvas + jsPDF)
 
 ---
@@ -24,16 +25,35 @@ npm install                  # installe `concurrently` (racine)
 npm run install:all          # installe les dépendances du backend et du frontend
 ```
 
-## 3. Placer le fichier Excel
+## 3. Source du fichier Excel
 
-Déposez le classeur dans :
+Le backend résout la source dans cet ordre de priorité :
 
+1. **`BUDGET_FILE_URL`** — URL réellement téléchargeable du classeur (ex. lien de
+   téléchargement direct SharePoint/OneDrive ou point de terminaison Graph API).
+   Jeton d'authentification optionnel via **`BUDGET_FILE_TOKEN`** (envoyé en
+   `Authorization: Bearer …`). Aucun secret n'est codé en dur.
+2. **`BUDGET_FILE_PATH`** — chemin local explicite vers le fichier, par exemple le
+   dossier OneDrive synchronisé depuis SharePoint.
+3. **`/data/*.xlsx`** — premier classeur trouvé dans `data/` (mode démo).
+
+> ⚠️ Un **lien de partage SharePoint** classique (`…/:x:/s/…`) n'est **pas**
+> téléchargeable directement sans authentification. Si la récupération distante
+> échoue (page de login HTML, 401/403…), l'application **bascule proprement** sur
+> le fallback local et affiche une erreur claire si aucun fallback n'est
+> disponible.
+
+### Configurer un chemin local synchronisé (recommandé)
+
+```bash
+# Linux/macOS
+export BUDGET_FILE_PATH="/chemin/vers/OneDrive/.../Budget.xlsx"
+
+# Windows (PowerShell)
+$env:BUDGET_FILE_PATH="C:\Users\moi\OneDrive - Audencia\...\Budget.xlsx"
 ```
-/data/Essai maquette 2026 AGO_vivi.xlsx
-```
 
-> Le serveur prend en priorité ce nom de fichier. À défaut, il prend le premier
-> `.xlsx` présent dans le dossier `/data`.
+Voir `.env.example` pour la liste complète des variables.
 
 ## 4. Lancer l'application
 
@@ -41,17 +61,11 @@ Déposez le classeur dans :
 npm run dev
 ```
 
-Cette commande lance en parallèle :
+- backend : `http://localhost:4000` (endpoint `/api/budget`)
+- frontend : `http://localhost:5173`
 
-- le **backend** sur `http://localhost:4000` (endpoint `/api/budget`)
-- le **frontend** sur `http://localhost:5173`
-
-Ouvrez ensuite **http://localhost:5173** dans votre navigateur.
-
-> Le frontend appelle `/api/budget` via le proxy Vite, vous n'avez rien à
-> configurer.
-
-### Lancer chaque service séparément
+Ouvrez **http://localhost:5173**. Le frontend appelle `/api/budget` via le proxy
+Vite, rien à configurer.
 
 ```bash
 npm run dev:server     # backend seul
@@ -60,125 +74,162 @@ npm run dev:frontend   # frontend seul
 
 ## 5. Utilisation
 
-1. Le dashboard charge automatiquement les données du fichier Excel.
-2. Cliquez sur les filtres de service ou sur **Global** pour changer de vue.
-3. Saisissez un commentaire libre (un par vue) – il est conservé pendant la
-   session du navigateur.
-4. Cliquez sur **Exporter en PDF** : un PDF A4 contenant le titre, la date, les
-   KPI, la barre de progression et le commentaire est téléchargé.
+1. Le dashboard charge les données une seule fois (loader « Analyse du fichier
+   budgétaire en cours… »).
+2. Filtres **Global** / par service : changement de vue **instantané** (aucun
+   nouvel appel API, aucun recalcul lourd côté client).
+3. Commentaire libre par vue, conservé pendant la session du navigateur.
+4. **Exporter en PDF** : logo, titre, date, KPI, barre d'avancement, commentaire
+   et tableau de détail (totaux par service + total général en vue Global).
 
 ---
 
-## Fonctionnement de l'extraction Excel
+## Modèle de données (règles 2026)
 
-### Règles appliquées
+Seuls **deux onglets** sont lus, **tous les autres sont ignorés** :
 
-Pour chaque onglet du classeur :
+### Onglet `CONSO` — consommé / fléché
 
-- **Colonne A** : nom du service (doit correspondre exactement, après
-  normalisation casse/accents/espaces, à l'un des services autorisés).
-- **Colonne K** → Budget initial (`Forecast (Calculé)`).
-- **Colonne L** → Budget consommé (`CONSOMME`).
-- **Colonne M** → Budget fléché (`FLECHE`).
-- Les cellules vides comptent comme `0`.
-- Les lignes contenant un libellé "Total", "Total général", "Grand Total" en
-  colonne A ou dans une cellule significative sont exclues.
-- Les valeurs sont sommées par service ; si un service apparaît dans plusieurs
-  onglets, ses montants s'additionnent (règle 11).
-- Les calculs sont effectués en valeurs brutes. L'arrondi à l'entier supérieur
-  (`Math.ceil`) est uniquement appliqué à l'affichage et au PDF.
+| Donnée   | Source              |
+|----------|---------------------|
+| Service  | en-tête **« Pôle »** (ou « Service ») |
+| Partie   | en-tête **« Partie »** |
+| Ensemble | en-tête **« Ensemble »** |
+| Consommé | en-tête **« CONSOMME »** |
+| Fléché   | en-tête **« FLECHE »** |
 
-### Services autorisés
+Granularité du détail = **Partie — Ensemble**. Les lignes de même
+`service + partie + ensemble` sont regroupées (somme du consommé et du fléché,
+compteur de lignes sources).
 
-`Presse`, `Event`, `Webmarketing`, `Com Interne`, `Réseaux sociaux`,
-`Audiovisuel`.
+### Onglet `BUDGET` — budget dédié
 
-> La comparaison est tolérante à la casse et aux accents : "EVENT", "Event",
-> "event" sont équivalents et normalisés vers `Event`.
+| Donnée       | Source |
+|--------------|--------|
+| Service      | en-tête **« Pôle »** (ou « Service ») |
+| Budget dédié | colonne année **« B20xx »** (sinon « Budget ») |
 
-### Stratégie outlineLevel et secours
+Le budget dédié est sommé **par service** et sert de budget de référence.
 
-Le cahier des charges définit comme critère prioritaire la propriété
-`outlineLevel === 1` d'ExcelJS.
+> **Résolution par en-tête plutôt que par lettre figée.** Le cahier des charges
+> cible le fichier SharePoint (CONSO `Q/U/V`, `N/O` ; BUDGET `J/K`). Le fichier de
+> démo présent dans `data/` a une disposition différente (CONSO service en `M`,
+> consommé `T`, fléché `U` ; BUDGET service en `G`, budget en `K`). Pour rester
+> robuste aux deux dispositions, les colonnes sont **localisées par leur en-tête**.
+> Les lettres effectivement retenues sont remontées dans `stats.consoColumns` /
+> `stats.budgetColumns`.
 
-**Sur le classeur fourni**, ExcelJS lit correctement `outlineLevel`, mais
-**aucune ligne exploitable** n'expose `outlineLevel === 1` : la quasi-totalité
-des lignes du fichier ont `outlineLevel === 0` (la seule ligne `outlineLevel=1`
-trouvée se situe sur l'onglet `GLOBAL`, qui n'expose pas la grille
-service/K/L/M attendue).
+### Services autorisés (liste blanche stricte)
 
-La **stratégie de secours documentée** est donc appliquée automatiquement, et
-un avertissement est exposé dans l'API (`warnings[]`) et dans l'interface :
+`Social Media`, `Webmarketing`, `Relations Presse`, `Audiovisuel`, `Event`,
+`Marketing France`, `Marketing International`, `Marketing Entreprise`,
+`Com et Marketing transverse`.
 
-> Une ligne est conservée si, et seulement si :
-> 1. la colonne A contient **exactement** un nom de service autorisé (match
->    après normalisation accent/casse) ;
-> 2. au moins une des colonnes K/L/M contient un nombre ;
-> 3. ni A, ni K, ni L, ni M ne contiennent un libellé "Total / Total général /
->    Grand Total" ;
-> 4. `outlineLevel` est `0` ou `1` (les sous-lignes `outlineLevel ≥ 2` sont
->    systématiquement rejetées).
+- Toute valeur hors liste est **ignorée** (comptée dans les warnings).
+- Comparaison tolérante à la casse/accents + alias connus
+  (`EVENTS`→`Event`, `PRESSE`→`Relations Presse`, `Réseaux sociaux`→`Social Media`…).
+- Un service avec budget mais sans conso apparaît (avancement calculé sur 0
+  consommé). Un service avec conso mais sans budget apparaît avec budget dédié
+  `0` et un **warning** (avancement non calculable).
 
-Cette stratégie évite toute addition aveugle de lignes : seules les lignes
-"feuilles" des tableaux croisés (où le service apparaît tel quel en colonne A)
-sont conservées. Les onglets `BUDGET`, `CONSO`, `BDC`, `PROSPECTION FRANCE`,
-etc. comportent des chaînes concaténées en colonne A (résultat de formules) et
-ne sont donc pas additionnés.
+### Calculs
 
-### Hypothèses techniques
+```
+Reste à dépenser = Budget dédié − Consommé − Fléché
+Avancement       = (Consommé + Fléché) / Budget dédié      (null si budget = 0)
+```
 
-| Hypothèse | Détail |
-|-----------|--------|
-| Librairie de lecture Excel | ExcelJS – lit `outlineLevel`, mais l'information n'est pas exploitable sur ce classeur (cf. ci-dessus). |
-| Normalisation des services | NFD + suppression des diacritiques + minuscule + trim. |
-| Devise | Euros uniquement ; format français `12 451 €`. |
-| Arrondi | `Math.ceil` à l'affichage et au PDF ; les calculs internes restent en `Number` JS. |
-| Reste à dépenser négatif | Affiché comme **dépassement** avec mise en avant visuelle. |
-| Budget initial = 0 | Avancement non calculable, affiché explicitement (pas de division par zéro). |
-| Persistance des commentaires | `sessionStorage` (1 commentaire par vue Global/service). |
+- Calculs en valeurs brutes ; arrondi `Math.ceil` **uniquement** à l'affichage et
+  au PDF. Montants en euros, format français (`12 450 €`).
+- Cellule vide = `0`. Valeur non numérique = `0` + warning.
+- Le **reste à dépenser n'est pas ventilé** au niveau ligne de détail (affiché
+  « — »), car le budget dédié n'existe qu'au niveau service. Il est calculé aux
+  niveaux **service** et **global**, coloré vert (≥ 0) / rouge (< 0).
+
+### Pourquoi pas `outlineLevel` ?
+
+L'ancienne logique `outlineLevel` n'est plus pertinente pour les onglets
+`CONSO`/`BUDGET` (lignes à plat). La sélection repose désormais sur :
+service présent dans la liste blanche + lignes de total exclues. Aucune addition
+aveugle, aucun rattachement d'une ligne vide au service précédent.
+
+---
+
+## Performance
+
+- **Lecture en streaming** (`ExcelJS.stream.xlsx.WorkbookReader`) : seules les
+  lignes de `CONSO` et `BUDGET` sont matérialisées ; les onglets volumineux
+  inutiles (EXTRACT BASWARE ~14 k lignes, BDC, …) ne sont jamais désérialisés.
+  Sur le classeur de démo : ~9 s au lieu de ~41 s en lecture complète.
+- **Cache mémoire backend** : le résultat agrégé est mis en cache. Avant tout
+  parsing, une « version » est calculée **sans lire le contenu** (local :
+  `mtime+taille` via `fs.stat` ; distant : `ETag`/`Last-Modified` via `HEAD`,
+  sinon fenêtre TTL). Si la version est inchangée → réponse immédiate, **aucune
+  relecture Excel**.
+- **Frontend** : un seul `fetch('/api/budget')`, `useMemo`/`useCallback`,
+  composants `React.memo`, et **accordéon par service** en vue Global (le détail
+  n'est rendu qu'au dépliage). Les changements de filtre sont quasi instantanés.
+- **Logs backend** :
+  `Excel parsed in 9596ms — 2 sheets used (CONSO, BUDGET) — CONSO 309/2409 kept, BUDGET 118/1061 kept — 7 services — aggregated in 20ms — cache updated`.
+
+---
+
+## Logo
+
+Placez le logo officiel dans `frontend/public/logo-audencia.svg`. Un placeholder
+vectoriel sobre est fourni. Si le fichier est absent ou illisible, l'en-tête
+affiche proprement le texte **« Audencia »** (fallback `onError`). Le logo figure
+aussi en tête de l'export PDF.
 
 ---
 
 ## Endpoints API
 
-`GET /api/health` → ping serveur.
+`GET /api/health` → ping + source courante.
 
-`GET /api/budget` → renvoie :
+`GET /api/budget` → JSON pré-calculé :
 
 ```jsonc
 {
-  "file": "Essai maquette 2026 AGO_vivi.xlsx",
-  "generatedAt": "2026-05-19T07:53:26.221Z",
-  "global":   { "name": "Global", "initial": …, "consomme": …, "fleche": …, "reste": …, "engagementRatio": …, "isOverBudget": false, "rowsCount": … },
+  "source": "Local (/data/…xlsx)",
+  "fileUpdatedAt": "2026-05-19T07:37:00.894Z",
+  "generatedAt": "…",
+  "cacheUsed": false,
+  "global":  { "budgetDedie": …, "consomme": …, "fleche": …, "resteADepenser": …, "avancement": …, "isOverBudget": false },
   "services": [
-    { "name": "Presse",         "initial": …, "consomme": …, "fleche": …, "reste": …, "engagementRatio": …, "isOverBudget": false, "rowsCount": … },
-    { "name": "Event",          … },
-    { "name": "Webmarketing",   … },
-    { "name": "Com Interne",    … },
-    { "name": "Réseaux sociaux", … },
-    { "name": "Audiovisuel",    … }
+    {
+      "service": "Relations Presse",
+      "budgetDedie": …, "consomme": …, "fleche": …,
+      "resteADepenser": …, "avancement": …, "isOverBudget": false,
+      "lignesDetail": [
+        { "service": "Relations Presse", "partie": "…", "ensemble": "…",
+          "detailLabel": "Partie — Ensemble", "consomme": …, "fleche": …,
+          "sourceRows": 2, "resteADepenser": null }
+      ]
+    }
   ],
   "warnings": [ "…" ],
   "stats": {
-    "rowsKept": 48,
-    "rowsIgnored": 24359,
-    "outlineLevel1Total": 1,
-    "outlineLevel1Kept": 0,
-    "outlineLevelFallback": true,
-    "sheets": [ { "name": "PRESSE", "kept": 12, "ignored": 4, "empty": false }, … ]
+    "consoRowsParsed": …, "consoRowsKept": …,
+    "budgetRowsParsed": …, "budgetRowsKept": …,
+    "consoColumns": { "service": "M", "partie": "N", "ensemble": "O", "consomme": "T", "fleche": "U" },
+    "budgetColumns": { "service": "G", "budget": "K" },
+    "sheetsUsed": ["CONSO", "BUDGET"],
+    "sheetsIgnored": ["BDC", "…"],
+    "servicesDetected": 7,
+    "aggregationMs": 20
   }
 }
 ```
 
-### Cas d'erreur traités
+### Cas d'erreur / robustesse
 
-- Fichier Excel absent → `404 FILE_NOT_FOUND`.
-- Erreur de lecture / parsing → `500 EXTRACTION_ERROR` avec message.
-- Onglet vide → ignoré silencieusement, comptabilisé dans `stats.sheets`.
-- Colonne manquante → la cellule vide est traitée comme `0`.
-- Service non reconnu → ligne ignorée, comptée dans `rowsIgnored`.
-- Aucun montant exploitable → ligne ignorée.
-- Budget initial nul → frontend affiche "non calculable", pas de division.
+- Aucune source / fichier introuvable → `404` (`NO_SOURCE`, `FILE_NOT_FOUND`).
+- Distant inaccessible → fallback local, sinon `500 REMOTE_AND_FALLBACK_FAILED`.
+- Onglet `CONSO`/`BUDGET` absent → warning, traité comme vide.
+- Colonne (Pôle/Partie/Ensemble/CONSOMME/FLECHE/budget) introuvable → warning.
+- Service hors liste / montant non numérique / budget = 0 → warnings dédiés.
+- Aucune ligne exploitable → warning, dashboard « aucune donnée ».
 
 ---
 
@@ -186,50 +237,35 @@ ne sont donc pas additionnés.
 
 ```
 budget/
-├── data/                                          ← Excel attendu ici
-│   └── Essai maquette 2026 AGO_vivi.xlsx
-├── server/                                        ← Backend Express
-│   ├── index.js                                   ← Serveur + endpoints
-│   ├── excel.js                                   ← Extraction + agrégation
+├── data/                         ← Excel de démo / fallback
+├── server/
+│   ├── index.js                  ← Express + cache mémoire + logs perf
+│   ├── source.js                 ← Résolution source + streaming + version
+│   ├── excel.js                  ← Agrégation CONSO/BUDGET (liste blanche)
 │   └── package.json
-├── frontend/                                      ← Frontend Vite/React/TS
-│   ├── index.html
-│   ├── vite.config.ts                             ← Proxy /api → :4000
-│   ├── tsconfig.json
+├── frontend/
+│   ├── index.html                ← police Sora (Google Fonts)
+│   ├── vite.config.ts            ← proxy /api → :4000
+│   ├── public/logo-audencia.svg  ← logo (remplaçable)
 │   └── src/
-│       ├── main.tsx
-│       ├── App.tsx
-│       ├── format.ts                              ← Formatage EUR / % / date FR
-│       ├── exportPdf.ts                           ← Capture DOM → PDF A4
-│       ├── styles.css                             ← Charte beige/bleu nuit
-│       └── components/
-│           ├── Header.tsx
-│           ├── Filters.tsx
-│           ├── KpiCards.tsx
-│           ├── ProgressSection.tsx
-│           └── CommentSection.tsx
-└── package.json                                   ← Scripts dev racine
+│       ├── App.tsx               ← fetch unique + sélection mémoïsée
+│       ├── format.ts, exportPdf.ts, styles.css, types.ts
+│       └── components/ Header, Filters, KpiCards, ProgressSection,
+│                       CommentSection, DetailTable
+├── .env.example
+└── package.json
 ```
 
 ---
 
 ## Mettre à jour le fichier Excel
 
-1. Remplacez `/data/Essai maquette 2026 AGO_vivi.xlsx` (ou tout autre `.xlsx`
-   dans `/data`).
-2. Rafraîchissez la page du dashboard.
-
-Aucune autre étape : la lecture est faite à chaque appel `/api/budget`.
-
----
+Remplacez le fichier (ou mettez à jour la version SharePoint) puis rafraîchissez
+le dashboard : le cache détecte automatiquement le changement (mtime/ETag) et
+relit la source. Sinon, la réponse est servie depuis le cache.
 
 ## Build production (optionnel)
 
 ```bash
-cd frontend
-npm run build
-# puis npm run preview pour tester le bundle
+cd frontend && npm run build && npm run preview
 ```
-
-Le backend peut servir le bundle généré : actuellement non câblé pour rester
-fidèle au mode "dev local" demandé.

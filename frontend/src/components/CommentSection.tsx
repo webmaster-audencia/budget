@@ -1,3 +1,5 @@
+import { memo } from 'react';
+
 interface Props {
   viewName: string;
   value: string;
@@ -5,7 +7,7 @@ interface Props {
   readonly?: boolean;
 }
 
-export function CommentSection({ viewName, value, onChange, readonly }: Props) {
+export const CommentSection = memo(function CommentSection({ viewName, value, onChange, readonly }: Props) {
   return (
     <section className="comment-section">
       <div className="comment-header">
@@ -26,4 +28,4 @@ export function CommentSection({ viewName, value, onChange, readonly }: Props) {
       )}
     </section>
   );
-}
+});

@@ -1,10 +1,12 @@
+import { memo } from 'react';
+
 interface Props {
   services: string[];
   active: string;
   onChange: (name: string) => void;
 }
 
-export function Filters({ services, active, onChange }: Props) {
+export const Filters = memo(function Filters({ services, active, onChange }: Props) {
   return (
     <div className="filters no-print">
       <span className="filter-label">Vue</span>
@@ -27,4 +29,4 @@ export function Filters({ services, active, onChange }: Props) {
       ))}
     </div>
   );
-}
+});

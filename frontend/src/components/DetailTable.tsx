@@ -1,165 +1,145 @@
-import type { DetailRow } from '../types';
+import { memo, useState, useCallback } from 'react';
+import type { ServiceView } from '../types';
 import { formatEUR } from '../format';
 
 interface Props {
-  rows: DetailRow[];
+  services: ServiceView[];
   isGlobal: boolean;
+  forceOpen?: boolean;
 }
 
-interface ServiceGroup {
-  service: string;
-  rows: DetailRow[];
-  total: {
-    budgetInitial: number;
-    budgetConsomme: number;
-    budgetFleche: number;
-    resteADepenser: number;
-  };
-}
-
-function groupByService(rows: DetailRow[]): ServiceGroup[] {
-  const map = new Map<string, DetailRow[]>();
-  for (const r of rows) {
-    if (!map.has(r.service)) map.set(r.service, []);
-    map.get(r.service)!.push(r);
-  }
-  return Array.from(map.entries()).map(([service, sRows]) => ({
-    service,
-    rows: sRows,
-    total: sRows.reduce(
-      (acc, r) => ({
-        budgetInitial: acc.budgetInitial + r.budgetInitial,
-        budgetConsomme: acc.budgetConsomme + r.budgetConsomme,
-        budgetFleche: acc.budgetFleche + r.budgetFleche,
-        resteADepenser: acc.resteADepenser + r.resteADepenser,
-      }),
-      { budgetInitial: 0, budgetConsomme: 0, budgetFleche: 0, resteADepenser: 0 }
-    ),
-  }));
-}
-
-function sumRows(rows: DetailRow[]) {
-  return rows.reduce(
-    (acc, r) => ({
-      budgetInitial: acc.budgetInitial + r.budgetInitial,
-      budgetConsomme: acc.budgetConsomme + r.budgetConsomme,
-      budgetFleche: acc.budgetFleche + r.budgetFleche,
-      resteADepenser: acc.resteADepenser + r.resteADepenser,
-    }),
-    { budgetInitial: 0, budgetConsomme: 0, budgetFleche: 0, resteADepenser: 0 }
-  );
-}
-
-function resteClass(v: number, forGrandTotal = false) {
-  const pos = forGrandTotal ? 'gt-positive' : 'reste-positive';
-  const neg = forGrandTotal ? 'gt-negative' : 'reste-negative';
-  if (v > 0) return `num ${pos}`;
+function resteClass(v: number, forDarkRow = false) {
+  const pos = forDarkRow ? 'gt-positive' : 'reste-positive';
+  const neg = forDarkRow ? 'gt-negative' : 'reste-negative';
   if (v < 0) return `num ${neg}`;
-  return 'num reste-zero';
+  return `num ${pos}`; // positif ou nul → vert (selon charte)
 }
 
-export function DetailTable({ rows, isGlobal }: Props) {
-  if (rows.length === 0) {
+const COLS = 6;
+
+const ServiceRows = memo(function ServiceRows({
+  s,
+  expandable,
+  defaultOpen,
+  forceOpen,
+}: {
+  s: ServiceView;
+  expandable: boolean;
+  defaultOpen: boolean;
+  forceOpen?: boolean;
+}) {
+  const [localOpen, setLocalOpen] = useState(defaultOpen);
+  const toggle = useCallback(() => setLocalOpen((o) => !o), []);
+  const open = forceOpen || localOpen;
+
+  return (
+    <>
+      {expandable && (
+        <tr className="group-header" onClick={toggle} style={{ cursor: 'pointer' }}>
+          <td colSpan={COLS}>
+            <span className="group-chevron">{open ? '▾' : '▸'}</span>
+            {s.service}
+            <span className="group-count">
+              {s.lignesDetail.length} ligne{s.lignesDetail.length > 1 ? 's' : ''}
+            </span>
+          </td>
+        </tr>
+      )}
+
+      {open &&
+        s.lignesDetail.map((r, i) => (
+          <tr key={`${s.service}-${i}`}>
+            <td className="detail-label">
+              {r.detailLabel}
+              {r.sourceRows > 1 && <span className="src-count"> ×{r.sourceRows}</span>}
+            </td>
+            <td className="detail-svc">{r.service}</td>
+            <td className="num muted">—</td>
+            <td className="num">{formatEUR(r.consomme)}</td>
+            <td className="num">{formatEUR(r.fleche)}</td>
+            <td className="num muted">—</td>
+          </tr>
+        ))}
+
+      {open && s.lignesDetail.length === 0 && (
+        <tr>
+          <td colSpan={COLS} className="muted" style={{ fontStyle: 'italic' }}>
+            Aucune ligne de consommation (CONSO) pour ce service.
+          </td>
+        </tr>
+      )}
+
+      <tr className="subtotal">
+        <td>{expandable ? `Total ${s.service}` : `TOTAL ${s.service}`}</td>
+        <td />
+        <td className="num">{formatEUR(s.budgetDedie)}</td>
+        <td className="num">{formatEUR(s.consomme)}</td>
+        <td className="num">{formatEUR(s.fleche)}</td>
+        <td className={resteClass(s.resteADepenser)}>{formatEUR(s.resteADepenser)}</td>
+      </tr>
+    </>
+  );
+});
+
+export const DetailTable = memo(function DetailTable({ services, isGlobal, forceOpen }: Props) {
+  if (services.length === 0) {
     return (
       <section className="detail-section">
-        <h3 className="detail-title">Détail des lignes</h3>
-        <p style={{ color: '#8599aa', fontSize: 13 }}>
-          Aucune ligne de détail pour cette sélection.
-        </p>
+        <h3 className="detail-title">Détail des dépenses</h3>
+        <p className="muted" style={{ fontSize: 13 }}>Aucune donnée pour cette sélection.</p>
       </section>
     );
   }
 
-  const grandTotal = sumRows(rows);
-  const groups = isGlobal ? groupByService(rows) : null;
+  const grand = services.reduce(
+    (acc, s) => {
+      acc.budgetDedie += s.budgetDedie;
+      acc.consomme += s.consomme;
+      acc.fleche += s.fleche;
+      acc.reste += s.resteADepenser;
+      return acc;
+    },
+    { budgetDedie: 0, consomme: 0, fleche: 0, reste: 0 }
+  );
 
   return (
     <section className="detail-section">
-      <h3 className="detail-title">Détail des lignes</h3>
+      <h3 className="detail-title">Détail des dépenses</h3>
+      <div className="detail-hint no-print">
+        Détail = <strong>Partie — Ensemble</strong> (onglet CONSO). Le budget dédié provient de l'onglet
+        BUDGET au niveau service ; il n'est pas ventilé par ligne (« — »).
+        {isGlobal && ' Cliquez sur un service pour déplier son détail.'}
+      </div>
       <div className="detail-table-wrap">
         <table className="detail-table">
           <thead>
             <tr>
+              <th>Détail</th>
               <th>Service</th>
-              <th className="num">Budget initial</th>
-              <th className="num">Budget consommé</th>
-              <th className="num">Budget fléché</th>
+              <th className="num">Budget dédié</th>
+              <th className="num">Consommé</th>
+              <th className="num">Fléché</th>
               <th className="num">Reste à dépenser</th>
             </tr>
           </thead>
           <tbody>
-            {isGlobal && groups ? (
-              groups.map((group) => (
-                <>
-                  {/* En-tête de groupe service */}
-                  <tr key={`group-${group.service}`} className="group-header">
-                    <td colSpan={5}>{group.service}</td>
-                  </tr>
+            {services.map((s) => (
+              <ServiceRows key={s.service} s={s} expandable={isGlobal} defaultOpen={!isGlobal} forceOpen={forceOpen} />
+            ))}
 
-                  {/* Lignes du service */}
-                  {group.rows.map((r, i) => (
-                    <tr key={`${r.sheet}-${r.rowNum}-${i}`}>
-                      <td style={{ paddingLeft: 28, color: '#4a6070', fontSize: 12.5 }}>
-                        {r.service}
-                        <span style={{ color: '#a0b4bf', fontSize: 11, marginLeft: 6 }}>
-                          ({r.sheet})
-                        </span>
-                      </td>
-                      <td className="num">{formatEUR(r.budgetInitial)}</td>
-                      <td className="num">{formatEUR(r.budgetConsomme)}</td>
-                      <td className="num">{formatEUR(r.budgetFleche)}</td>
-                      <td className={resteClass(r.resteADepenser)}>
-                        {formatEUR(r.resteADepenser)}
-                      </td>
-                    </tr>
-                  ))}
-
-                  {/* Sous-total service (si > 1 ligne) */}
-                  {group.rows.length > 1 && (
-                    <tr key={`sub-${group.service}`} className="subtotal">
-                      <td>Sous-total {group.service}</td>
-                      <td className="num">{formatEUR(group.total.budgetInitial)}</td>
-                      <td className="num">{formatEUR(group.total.budgetConsomme)}</td>
-                      <td className="num">{formatEUR(group.total.budgetFleche)}</td>
-                      <td className={resteClass(group.total.resteADepenser)}>
-                        {formatEUR(group.total.resteADepenser)}
-                      </td>
-                    </tr>
-                  )}
-                </>
-              ))
-            ) : (
-              rows.map((r, i) => (
-                <tr key={`${r.sheet}-${r.rowNum}-${i}`}>
-                  <td>
-                    {r.service}
-                    <span style={{ color: '#a0b4bf', fontSize: 11, marginLeft: 6 }}>
-                      ({r.sheet})
-                    </span>
-                  </td>
-                  <td className="num">{formatEUR(r.budgetInitial)}</td>
-                  <td className="num">{formatEUR(r.budgetConsomme)}</td>
-                  <td className="num">{formatEUR(r.budgetFleche)}</td>
-                  <td className={resteClass(r.resteADepenser)}>
-                    {formatEUR(r.resteADepenser)}
-                  </td>
-                </tr>
-              ))
+            {isGlobal && (
+              <tr className="grand-total">
+                <td>TOTAL GÉNÉRAL</td>
+                <td />
+                <td className="num">{formatEUR(grand.budgetDedie)}</td>
+                <td className="num">{formatEUR(grand.consomme)}</td>
+                <td className="num">{formatEUR(grand.fleche)}</td>
+                <td className={resteClass(grand.reste, true)}>{formatEUR(grand.reste)}</td>
+              </tr>
             )}
-
-            {/* Total global */}
-            <tr className="grand-total">
-              <td>{isGlobal ? 'TOTAL GÉNÉRAL' : `TOTAL ${rows[0]?.service ?? ''}`}</td>
-              <td className="num">{formatEUR(grandTotal.budgetInitial)}</td>
-              <td className="num">{formatEUR(grandTotal.budgetConsomme)}</td>
-              <td className="num">{formatEUR(grandTotal.budgetFleche)}</td>
-              <td className={resteClass(grandTotal.resteADepenser, true)}>
-                {formatEUR(grandTotal.resteADepenser)}
-              </td>
-            </tr>
           </tbody>
         </table>
       </div>
     </section>
   );
-}
+});

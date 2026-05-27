@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Header } from './components/Header';
 import { Filters } from './components/Filters';
 import { KpiCards } from './components/KpiCards';
@@ -6,7 +6,7 @@ import { ProgressSection } from './components/ProgressSection';
 import { CommentSection } from './components/CommentSection';
 import { DetailTable } from './components/DetailTable';
 import { exportNodeToPdf } from './exportPdf';
-import type { BudgetResponse, BudgetView, DetailRow } from './types';
+import type { BudgetResponse, ServiceView } from './types';
 import { formatDateFr } from './format';
 
 type LoadState =
@@ -14,7 +14,7 @@ type LoadState =
   | { kind: 'error'; message: string; status?: number }
   | { kind: 'ready'; data: BudgetResponse };
 
-const STORAGE_KEY = 'audencia-budget-comments-v2';
+const STORAGE_KEY = 'audencia-budget-comments-v3';
 
 function App() {
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
@@ -46,29 +46,51 @@ function App() {
     catch { /* indisponible */ }
   }, [comments]);
 
-  const serviceNames = state.kind === 'ready' ? state.data.services.map((s) => s.name) : [];
-
-  const currentView: BudgetView | null = useMemo(() => {
-    if (state.kind !== 'ready') return null;
-    if (activeView === 'Global') return state.data.global;
-    return state.data.services.find((s) => s.name === activeView) ?? state.data.global;
-  }, [state, activeView]);
-
-  const currentDetails: DetailRow[] = useMemo(() => {
-    if (state.kind !== 'ready') return [];
-    if (activeView === 'Global') return state.data.details;
-    return state.data.details.filter((r) => r.service === activeView);
-  }, [state, activeView]);
-
   const isGlobal = activeView === 'Global';
+  const serviceNames = state.kind === 'ready' ? state.data.services.map((s) => s.service) : [];
 
-  async function handleExport() {
-    if (!exportRef.current || !currentView) return;
+  // Sélection rapide côté client (aucun recalcul lourd, aucun nouvel appel API).
+  const selected: ServiceView | null = useMemo(() => {
+    if (state.kind !== 'ready' || isGlobal) return null;
+    return state.data.services.find((s) => s.service === activeView) ?? null;
+  }, [state, activeView, isGlobal]);
+
+  // Totaux affichés (KPI + progression) : global ou service sélectionné.
+  const totals = useMemo(() => {
+    if (state.kind !== 'ready') return null;
+    if (isGlobal) return state.data.global;
+    return selected
+      ? {
+          budgetDedie: selected.budgetDedie,
+          consomme: selected.consomme,
+          fleche: selected.fleche,
+          resteADepenser: selected.resteADepenser,
+          avancement: selected.avancement,
+          isOverBudget: selected.isOverBudget,
+        }
+      : null;
+  }, [state, isGlobal, selected]);
+
+  // Services à afficher dans le tableau de détail.
+  const tableServices: ServiceView[] = useMemo(() => {
+    if (state.kind !== 'ready') return [];
+    return isGlobal ? state.data.services : selected ? [selected] : [];
+  }, [state, isGlobal, selected]);
+
+  const viewName = isGlobal ? 'Global' : activeView;
+  const commentValue = comments[viewName] ?? '';
+  const onCommentChange = useCallback(
+    (v: string) => setComments((prev) => ({ ...prev, [viewName]: v })),
+    [viewName]
+  );
+
+  const handleExport = useCallback(async () => {
+    if (!exportRef.current) return;
     setExporting(true);
     try {
-      await new Promise((r) => setTimeout(r, 80));
+      await new Promise((r) => setTimeout(r, 120)); // laisse le DOM se mettre à jour (groupes dépliés)
       const date = new Date().toISOString().slice(0, 10);
-      const safe = currentView.name.replace(/\s+/g, '_').replace(/[^\w\-]/g, '');
+      const safe = viewName.replace(/\s+/g, '_').replace(/[^\w\-]/g, '');
       await exportNodeToPdf(exportRef.current, `Audencia_Budget_${safe}_${date}.pdf`);
     } catch (e) {
       console.error('Export PDF :', e);
@@ -76,7 +98,7 @@ function App() {
     } finally {
       setExporting(false);
     }
-  }
+  }, [viewName]);
 
   return (
     <div className="app">
@@ -87,8 +109,8 @@ function App() {
           {state.kind === 'loading' && (
             <div className="state-card">
               <div className="spinner" />
-              <h3>Lecture du fichier budgétaire…</h3>
-              <p>Agrégation des données par service.</p>
+              <h3>Analyse du fichier budgétaire en cours…</h3>
+              <p>Lecture des onglets CONSO et BUDGET, agrégation par service.</p>
             </div>
           )}
 
@@ -96,72 +118,82 @@ function App() {
             <div className="state-card">
               <h3>Impossible de charger les données</h3>
               <p>
-                {state.status === 404
-                  ? 'Le fichier Excel est introuvable.'
-                  : "Le serveur n'a pas pu lire le fichier Excel."}
-              </p>
-              <p>
-                Vérifiez qu'un fichier <code>.xlsx</code> est dans le dossier <code>/data</code>{' '}
-                et que le backend tourne sur <code>localhost:4000</code>.
+                Vérifiez la source du fichier : lien SharePoint téléchargeable
+                (<code>BUDGET_FILE_URL</code>), chemin local (<code>BUDGET_FILE_PATH</code>),
+                ou fichier <code>.xlsx</code> dans <code>/data</code>. Le backend doit tourner sur{' '}
+                <code>localhost:4000</code>.
               </p>
               <div className="state-error">{state.message}</div>
             </div>
           )}
 
-          {state.kind === 'ready' && currentView && (
+          {state.kind === 'ready' && totals && (
             <>
               <Filters services={serviceNames} active={activeView} onChange={setActiveView} />
 
               {state.data.warnings.length > 0 && (
-                <div className="warnings no-print">
-                  <strong>Avertissements d'extraction :</strong>
+                <details className="warnings no-print">
+                  <summary><strong>Avertissements d'extraction</strong> ({state.data.warnings.length})</summary>
                   <ul>
                     {state.data.warnings.map((w, i) => <li key={i}>{w}</li>)}
                   </ul>
-                </div>
+                </details>
               )}
 
               {/* Zone capturée pour le PDF */}
-              <div ref={exportRef}>
+              <div ref={exportRef} className="export-capture">
                 <div className="view-header">
+                  <div className="view-brand-pdf">
+                    <img src="/logo-audencia.svg" alt="Audencia" className="pdf-logo" />
+                  </div>
                   <div className="view-title-wrap">
-                    <div className="view-eyebrow">Direction Communication & Marketing</div>
+                    <div className="view-eyebrow">Direction de la Communication & Marketing</div>
                     <h2 className="view-title">
                       {isGlobal ? (
-                        <>Vue <span className="highlight">globale</span> — Budget marketing</>
+                        <>Vue <span className="highlight">globale</span> — Suivi budgétaire</>
                       ) : (
-                        <>Service : <span className="highlight">{currentView.name}</span></>
+                        <>Service : <span className="highlight">{viewName}</span></>
                       )}
                     </h2>
                   </div>
                   <span className="view-date">{formatDateFr()}</span>
                 </div>
 
-                <KpiCards view={currentView} />
-                <ProgressSection view={currentView} />
+                <KpiCards
+                  budgetDedie={totals.budgetDedie}
+                  consomme={totals.consomme}
+                  fleche={totals.fleche}
+                  reste={totals.resteADepenser}
+                  isOverBudget={totals.isOverBudget}
+                />
+                <ProgressSection
+                  budgetDedie={totals.budgetDedie}
+                  consomme={totals.consomme}
+                  fleche={totals.fleche}
+                  reste={totals.resteADepenser}
+                  avancement={totals.avancement}
+                  isOverBudget={totals.isOverBudget}
+                />
                 <CommentSection
-                  viewName={currentView.name}
-                  value={comments[currentView.name] ?? ''}
-                  onChange={(v) => setComments((prev) => ({ ...prev, [currentView.name]: v }))}
+                  viewName={viewName}
+                  value={commentValue}
+                  onChange={onCommentChange}
                   readonly={exporting}
                 />
-                <DetailTable rows={currentDetails} isGlobal={isGlobal} />
+                <DetailTable services={tableServices} isGlobal={isGlobal} forceOpen={exporting} />
               </div>
 
               <div className="actions no-print">
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={handleExport}
-                  disabled={exporting}
-                >
+                <button type="button" className="btn btn-primary" onClick={handleExport} disabled={exporting}>
                   {exporting ? 'Export en cours…' : 'Exporter en PDF'}
                 </button>
               </div>
 
               <div className="footer no-print">
-                Fichier source : {state.data.file} — {state.data.stats.rowsKept} lignes retenues
-                sur {state.data.stats.budgetSheetsDetected} onglet(s) budget détecté(s).
+                Source : {state.data.source}
+                {state.data.fileUpdatedAt && ` — fichier daté du ${formatDateFr(new Date(state.data.fileUpdatedAt))}`}
+                {' — '}{state.data.stats.servicesDetected} service(s) · CONSO {state.data.stats.consoRowsKept ?? 0} ligne(s) retenues ·
+                BUDGET {state.data.stats.budgetRowsKept ?? 0} ligne(s) retenues · cache {state.data.cacheUsed ? 'utilisé' : 'mis à jour'}.
               </div>
             </>
           )}

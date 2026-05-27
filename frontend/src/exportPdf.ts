@@ -13,7 +13,7 @@ export async function exportNodeToPdf(
   node.classList.add('export-zone');
   try {
     const canvas = await html2canvas(node, {
-      backgroundColor: '#f7f2e9',
+      backgroundColor: '#fff8e8',
       scale: 2,
       useCORS: true,
       logging: false,
@@ -55,7 +55,7 @@ export async function exportNodeToPdf(
         const h = Math.min(sliceHpx, totalPxH - yPx);
         tmpCanvas.height = h;
         ctx.clearRect(0, 0, tmpCanvas.width, tmpCanvas.height);
-        ctx.fillStyle = '#f7f2e9';
+        ctx.fillStyle = '#fff8e8';
         ctx.fillRect(0, 0, tmpCanvas.width, tmpCanvas.height);
         ctx.drawImage(canvas, 0, yPx, canvas.width, h, 0, 0, canvas.width, h);
         const slice = tmpCanvas.toDataURL('image/png');

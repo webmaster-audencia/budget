@@ -1,37 +1,58 @@
 /**
- * Lecture & agrégation du fichier Excel budgétaire.
+ * Agrégation budgétaire — modèle de données 2026.
  *
- * Stratégie de sélection des onglets :
- *   Seuls les onglets contenant l'en-tête "Forecast (Calculé)" en colonne K
- *   (dans les 15 premières lignes) sont traités comme onglets budget.
- *   Les autres onglets (BDC, CONSO, BUDGET, EXTRACT BASWARE, etc.) sont ignorés.
+ * SEULS deux onglets sont lus :
+ *   - CONSO  : consommé / fléché, ventilés par Partie + Ensemble
+ *   - BUDGET : budget dédié par service
+ * Tous les autres onglets sont ignorés.
  *
- * Stratégie de sélection des lignes (dans les onglets budget) :
- *   - Colonne A : chaîne non vide, non-formule, non "Total/Grand Total/..."
- *   - Pas de ligne d'en-tête (A = "Service", "Pôle", "Étiquettes de lignes"…)
- *   - Au moins un montant avec valeur absolue > 0 parmi K, L, M
- *   - outlineLevel ≤ 1 (les sous-lignes outlineLevel ≥ 2 sont rejetées)
+ * Colonnes (résolues par EN-TÊTE, pas par lettre figée, pour rester robuste
+ * aux variations de mise en page entre le fichier de démo et le fichier
+ * SharePoint cible) :
  *
- * Stratégie outlineLevel :
- *   Si aucune ligne utile n'a outlineLevel === 1, un avertissement est retourné
- *   et on accepte outlineLevel === 0 (stratégie de secours documentée).
+ *   CONSO  : Service  ← en-tête « Pôle » (ou « Service »)
+ *            Partie   ← « Partie »
+ *            Ensemble ← « Ensemble »
+ *            Consommé ← « CONSOMME »
+ *            Fléché   ← « FLECHE »
  *
- * Colonnes :
- *   K = Forecast (Calculé) = budgetInitial
- *   L = CONSOMME           = budgetConsomme
- *   M = FLECHE             = budgetFleche
+ *   BUDGET : Service      ← « Pôle » (ou « Service »)
+ *            Budget dédié ← en-tête année « B20xx » (sinon « Budget »)
  *
- * Les services sont découverts dynamiquement depuis la colonne A.
- * Aucune liste fixe de services n'est utilisée.
+ * Référence demandée (fichier SharePoint cible) : CONSO Q/U/V + N/O,
+ * BUDGET J/K. La résolution par en-tête couvre ces lettres comme la
+ * disposition réelle du fichier de démo. Les lettres effectivement
+ * retenues sont remontées dans les warnings/stats à des fins de contrôle.
+ *
+ * Services : liste blanche stricte. Toute valeur hors liste est ignorée.
  */
 
-const ExcelJS = require('exceljs');
+// Liste blanche stricte des services autorisés (ordre d'affichage).
+const AUTHORIZED_SERVICES = [
+  'Social Media',
+  'Webmarketing',
+  'Relations Presse',
+  'Audiovisuel',
+  'Event',
+  'Marketing France',
+  'Marketing International',
+  'Marketing Entreprise',
+  'Com et Marketing transverse',
+];
 
-// Mots-clés en colonne A qui indiquent une ligne d'en-tête ou de total à exclure.
-const HEADER_LABELS = new Set([
-  'service', 'pole', 'etiquettes de lignes', 'cle rappro',
-  'axe', 'rubrique', 'libelle', 'designation',
-]);
+// Variantes connues (normalisées) → nom canonique.
+const SERVICE_ALIASES = {
+  events: 'Event',
+  evenement: 'Event',
+  evenementiel: 'Event',
+  presse: 'Relations Presse',
+  'relations presse': 'Relations Presse',
+  'social media': 'Social Media',
+  socialmedia: 'Social Media',
+  'reseaux sociaux': 'Social Media',
+  webmarketing: 'Webmarketing',
+  'web marketing': 'Webmarketing',
+};
 
 function normalize(s) {
   if (s == null) return '';
@@ -43,6 +64,22 @@ function normalize(s) {
     .toLowerCase();
 }
 
+// Index normalisé → canonique (liste blanche + alias).
+const SERVICE_LOOKUP = (() => {
+  const m = new Map();
+  for (const name of AUTHORIZED_SERVICES) m.set(normalize(name), name);
+  for (const [k, v] of Object.entries(SERVICE_ALIASES)) m.set(normalize(k), v);
+  return m;
+})();
+
+/** Retourne le service canonique autorisé, ou null si hors liste. */
+function matchService(raw) {
+  if (typeof raw !== 'string') return null;
+  const n = normalize(raw);
+  if (!n) return null;
+  return SERVICE_LOOKUP.get(n) || null;
+}
+
 function isTotalLabel(s) {
   if (typeof s !== 'string') return false;
   const n = normalize(s);
@@ -51,16 +88,11 @@ function isTotalLabel(s) {
     n === 'grand total' ||
     n === 'total' ||
     n === 'sous-total' ||
+    n === 'sous total' ||
     n === 'subtotal' ||
     n.startsWith('total ') ||
-    n.endsWith(' total') ||
-    n.includes('total general') ||
-    n.includes('grand total')
+    n.endsWith(' total')
   );
-}
-
-function isHeaderLabel(s) {
-  return HEADER_LABELS.has(normalize(s));
 }
 
 /** Valeur effective d'une cellule (suit les formules jusqu'au résultat). */
@@ -68,26 +100,19 @@ function cellValue(cell) {
   const v = cell ? cell.value : null;
   if (v == null) return null;
   if (typeof v === 'object') {
-    if (Array.isArray(v.richText)) return v.richText.map(r => r.text).join('');
+    if (Array.isArray(v.richText)) return v.richText.map((r) => r.text).join('');
     if ('result' in v) return v.result ?? null;
     if ('text' in v) return v.text;
     if (v instanceof Date) return v;
-    // sharedFormula sans result : on considère vide
   }
   return v;
 }
 
-/** Vérifie si la cellule contient une formule (et non une valeur brute). */
-function isFormulaCell(cell) {
-  const v = cell ? cell.value : null;
-  if (v == null || typeof v !== 'object') return false;
-  return 'formula' in v || 'sharedFormula' in v;
-}
-
+/** Conversion numérique tolérante. Renvoie null si non convertible. */
 function toNumber(v) {
   if (typeof v === 'number' && isFinite(v)) return v;
   if (typeof v === 'string') {
-    const cleaned = v.replace(/\s/g, '').replace(',', '.');
+    const cleaned = v.replace(/[\s €]/g, '').replace(/\.(?=\d{3}\b)/g, '').replace(',', '.');
     if (cleaned === '' || cleaned === '-') return 0;
     const n = Number(cleaned);
     if (isFinite(n)) return n;
@@ -95,196 +120,323 @@ function toNumber(v) {
   return null;
 }
 
+const COL_LETTERS = (() => {
+  const out = [];
+  for (let i = 1; i <= 60; i++) {
+    let n = i;
+    let s = '';
+    while (n > 0) {
+      const m = (n - 1) % 26;
+      s = String.fromCharCode(65 + m) + s;
+      n = Math.floor((n - 1) / 26);
+    }
+    out[i] = s;
+  }
+  return out;
+})();
+
 /**
- * Détecte si un onglet est un onglet "budget" en cherchant le mot "forecast"
- * (normalisé) dans la colonne K des 15 premières lignes non vides.
+ * Localise les colonnes d'un onglet par correspondance d'en-tête.
+ * @param {ExcelJS.Worksheet} ws
+ * @param {Object.<string, (norm:string, raw:string)=>boolean>} matchers
+ * @param {number} maxRows nombre de lignes d'en-tête à scanner
+ * @returns {{ cols: Object.<string, number>, letters: Object.<string,string>, headerRow: number }}
  */
-function isBudgetSheet(ws) {
-  let found = false;
-  let scanned = 0;
-  ws.eachRow({ includeEmpty: false }, (row) => {
-    if (found || scanned >= 15) return;
-    scanned++;
-    const k = cellValue(row.getCell('K'));
-    if (typeof k === 'string' && normalize(k).includes('forecast')) {
-      found = true;
-    }
-  });
-  return found;
-}
+function resolveColumns(ws, matchers, maxRows = 6) {
+  const keys = Object.keys(matchers);
+  const cols = {};
+  const headerRows = {};
+  const lastCol = Math.max(ws.actualColumnCount || 0, ws.columnCount || 0, 1);
 
-function emptyAgg() {
-  return { initial: 0, consomme: 0, fleche: 0, rows: 0 };
-}
-
-function buildView(name, agg) {
-  const initial = agg.initial || 0;
-  const consomme = agg.consomme || 0;
-  const fleche = agg.fleche || 0;
-  const reste = initial - consomme - fleche;
-  const engagementRatio = initial > 0 ? (consomme + fleche) / initial : null;
-  return {
-    name,
-    initial,
-    consomme,
-    fleche,
-    reste,
-    engagementRatio,
-    isOverBudget: reste < 0,
-    rowsCount: agg.rows,
-  };
-}
-
-async function extractBudget(filePath) {
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.readFile(filePath);
-
-  /** @type {Array<{sheet:string,rowNum:number,service:string,budgetInitial:number,budgetConsomme:number,budgetFleche:number,resteADepenser:number}>} */
-  const details = [];
-  /** @type {Object.<string, {initial:number,consomme:number,fleche:number,rows:number}>} */
-  const byService = {};
-
-  const warnings = [];
-  const sheetsProcessed = [];
-  let kept = 0;
-  let ignored = 0;
-  let outlineLevel1Count = 0;
-  let outlineLevel1Kept = 0;
-
-  for (const ws of wb.worksheets) {
-    if (!ws || ws.actualRowCount === 0) {
-      sheetsProcessed.push({ name: ws ? ws.name : '?', kept: 0, ignored: 0, empty: true, skipped: false });
-      continue;
-    }
-
-    if (!isBudgetSheet(ws)) {
-      sheetsProcessed.push({ name: ws.name, kept: 0, ignored: 0, empty: false, skipped: true });
-      continue;
-    }
-
-    let sheetKept = 0;
-    let sheetIgnored = 0;
-
-    ws.eachRow({ includeEmpty: false }, (row) => {
-      if (row.outlineLevel === 1) outlineLevel1Count++;
-
-      // Colonne A : doit être une chaîne brute (pas une formule)
-      const cellA = row.getCell('A');
-      if (isFormulaCell(cellA)) { sheetIgnored++; return; }
-
-      const aRaw = cellValue(cellA);
-      if (typeof aRaw !== 'string' || aRaw.trim() === '') { sheetIgnored++; return; }
-
-      const serviceName = aRaw.trim();
-
-      if (isTotalLabel(serviceName)) { sheetIgnored++; return; }
-      if (isHeaderLabel(serviceName)) { sheetIgnored++; return; }
-
-      // Colonnes K, L, M
-      const kRaw = cellValue(row.getCell('K'));
-      const lRaw = cellValue(row.getCell('L'));
-      const mRaw = cellValue(row.getCell('M'));
-
-      const kNum = toNumber(kRaw);
-      const lNum = toNumber(lRaw);
-      const mNum = toNumber(mRaw);
-
-      // Exiger au moins une valeur non nulle (|val| > 0)
-      const magnitude =
-        Math.abs(kNum ?? 0) + Math.abs(lNum ?? 0) + Math.abs(mNum ?? 0);
-      if (magnitude === 0) { sheetIgnored++; return; }
-
-      // Exclure libellés de total dans les colonnes budget
-      for (const v of [kRaw, lRaw, mRaw]) {
-        if (typeof v === 'string' && isTotalLabel(v)) {
-          sheetIgnored++;
-          return;
+  for (let r = 1; r <= maxRows; r++) {
+    const row = ws.getRow(r);
+    for (let c = 1; c <= lastCol; c++) {
+      const raw = cellValue(row.getCell(c));
+      if (raw == null || typeof raw === 'object') continue;
+      const norm = normalize(raw);
+      if (!norm) continue;
+      for (const key of keys) {
+        if (cols[key] != null) continue;
+        if (matchers[key](norm, String(raw))) {
+          cols[key] = c;
+          headerRows[key] = r;
         }
       }
-
-      // Sous-lignes Excel (outline > 1) rejetées
-      if (row.outlineLevel > 1) { sheetIgnored++; return; }
-
-      const budgetInitial = kNum ?? 0;
-      const budgetConsomme = lNum ?? 0;
-      const budgetFleche = mNum ?? 0;
-      const resteADepenser = budgetInitial - budgetConsomme - budgetFleche;
-
-      if (!byService[serviceName]) byService[serviceName] = emptyAgg();
-      byService[serviceName].initial += budgetInitial;
-      byService[serviceName].consomme += budgetConsomme;
-      byService[serviceName].fleche += budgetFleche;
-      byService[serviceName].rows += 1;
-
-      details.push({
-        sheet: ws.name,
-        rowNum: row.number,
-        service: serviceName,
-        budgetInitial,
-        budgetConsomme,
-        budgetFleche,
-        resteADepenser,
-      });
-
-      sheetKept++;
-      if (row.outlineLevel === 1) outlineLevel1Kept++;
-    });
-
-    kept += sheetKept;
-    ignored += sheetIgnored;
-    sheetsProcessed.push({ name: ws.name, kept: sheetKept, ignored: sheetIgnored, empty: false, skipped: false });
+    }
   }
 
-  // Avertissements
-  const usedFallback = outlineLevel1Kept === 0;
-  if (usedFallback) {
-    warnings.push(
-      `Stratégie de secours outlineLevel appliquée : ${outlineLevel1Count} ligne(s) avec outlineLevel=1 trouvée(s) dans le classeur, mais aucune ne correspond à une ligne de données budget exploitable. Les lignes avec outlineLevel=0 sont conservées (exclusion stricte des formules, des totaux et des en-têtes).`
-    );
-  }
-
-  const budgetSheetsCount = sheetsProcessed.filter(s => !s.skipped && !s.empty).length;
-  if (budgetSheetsCount === 0) {
-    warnings.push(
-      "Aucun onglet budget détecté. Vérifiez que le fichier Excel contient des onglets avec l'en-tête \"Forecast (Calculé)\" en colonne K."
-    );
-  }
-  if (kept === 0 && budgetSheetsCount > 0) {
-    warnings.push(
-      "Les onglets budget ont été détectés, mais aucune ligne exploitable n'a été retenue (colonne A vide, valeurs K/L/M toutes nulles, ou lignes de total)."
-    );
-  }
-
-  // Construction des vues : services triés alphabétiquement
-  const serviceNames = Object.keys(byService).sort((a, b) =>
-    a.localeCompare(b, 'fr', { sensitivity: 'base' })
-  );
-  const services = serviceNames.map(name => buildView(name, byService[name]));
-
-  const globalAgg = Object.values(byService).reduce((acc, a) => {
-    acc.initial += a.initial;
-    acc.consomme += a.consomme;
-    acc.fleche += a.fleche;
-    acc.rows += a.rows;
-    return acc;
-  }, emptyAgg());
-  const global = buildView('Global', globalAgg);
-
-  return {
-    global,
-    services,
-    details,
-    warnings,
-    stats: {
-      rowsKept: kept,
-      rowsIgnored: ignored,
-      budgetSheetsDetected: budgetSheetsCount,
-      sheets: sheetsProcessed,
-      outlineLevel1Total: outlineLevel1Count,
-      outlineLevel1Kept,
-      outlineLevelFallback: usedFallback,
-    },
-  };
+  const letters = {};
+  for (const k of keys) letters[k] = cols[k] != null ? COL_LETTERS[cols[k]] : null;
+  const headerRow = Object.values(headerRows).length
+    ? Math.max(...Object.values(headerRows))
+    : 1;
+  return { cols, letters, headerRow };
 }
 
-module.exports = { extractBudget };
+function emptyTotals() {
+  return { budgetDedie: 0, consomme: 0, fleche: 0 };
+}
+
+function detailLabel(partie, ensemble) {
+  const p = (partie || '').trim();
+  const e = (ensemble || '').trim();
+  if (p && e) return `${p} — ${e}`;
+  if (p) return p;
+  if (e) return e;
+  return 'Non renseigné';
+}
+
+/* ----------------------------- CONSO ----------------------------- */
+function extractConso(ws, warnings, stats) {
+  const result = { groups: new Map(), byService: new Map() }; // byService: service -> {consomme,fleche}
+  if (!ws) {
+    warnings.push("Onglet « CONSO » introuvable : aucun consommé ni fléché ne peut être calculé.");
+    return result;
+  }
+
+  const { cols, letters, headerRow } = resolveColumns(ws, {
+    service: (n) => n === 'pole' || n === 'service',
+    partie: (n) => n === 'partie',
+    ensemble: (n) => n === 'ensemble',
+    consomme: (n) => n === 'consomme',
+    fleche: (n) => n === 'fleche',
+  });
+  stats.consoColumns = letters;
+  stats.consoHeaderRow = headerRow;
+
+  for (const k of ['service', 'consomme', 'fleche']) {
+    if (cols[k] == null) {
+      warnings.push(`Onglet CONSO : colonne « ${k} » introuvable (en-tête non détecté). Les valeurs correspondantes seront ignorées.`);
+    }
+  }
+  if (cols.service == null) return result;
+
+  const unknownServices = new Set();
+  let parsed = 0;
+  let kept = 0;
+  let nonNumeric = 0;
+
+  ws.eachRow({ includeEmpty: false }, (row, rn) => {
+    if (rn <= headerRow) return;
+    parsed++;
+
+    const serviceRaw = cols.service ? cellValue(row.getCell(cols.service)) : null;
+    if (typeof serviceRaw !== 'string' || serviceRaw.trim() === '') return;
+    if (isTotalLabel(serviceRaw)) return;
+
+    const service = matchService(serviceRaw);
+    if (!service) {
+      unknownServices.add(serviceRaw.trim());
+      return;
+    }
+
+    const partie = cols.partie ? cellValue(row.getCell(cols.partie)) : '';
+    const ensemble = cols.ensemble ? cellValue(row.getCell(cols.ensemble)) : '';
+    const partieStr = typeof partie === 'string' ? partie.trim() : '';
+    const ensembleStr = typeof ensemble === 'string' ? ensemble.trim() : '';
+
+    const cRaw = cols.consomme ? cellValue(row.getCell(cols.consomme)) : null;
+    const fRaw = cols.fleche ? cellValue(row.getCell(cols.fleche)) : null;
+
+    let consomme = toNumber(cRaw);
+    let fleche = toNumber(fRaw);
+    if (consomme == null) { if (cRaw != null && String(cRaw).trim() !== '') nonNumeric++; consomme = 0; }
+    if (fleche == null) { if (fRaw != null && String(fRaw).trim() !== '') nonNumeric++; fleche = 0; }
+
+    const key = `${service}||${partieStr}||${ensembleStr}`;
+    let g = result.groups.get(key);
+    if (!g) {
+      g = {
+        service,
+        partie: partieStr,
+        ensemble: ensembleStr,
+        detailLabel: detailLabel(partieStr, ensembleStr),
+        consomme: 0,
+        fleche: 0,
+        sourceRows: 0,
+      };
+      result.groups.set(key, g);
+    }
+    g.consomme += consomme;
+    g.fleche += fleche;
+    g.sourceRows += 1;
+
+    let svc = result.byService.get(service);
+    if (!svc) { svc = { consomme: 0, fleche: 0 }; result.byService.set(service, svc); }
+    svc.consomme += consomme;
+    svc.fleche += fleche;
+
+    kept++;
+  });
+
+  if (unknownServices.size) {
+    warnings.push(
+      `Onglet CONSO : ${unknownServices.size} valeur(s) de service hors liste blanche ignorée(s) — ${[...unknownServices].slice(0, 12).join(', ')}${unknownServices.size > 12 ? '…' : ''}.`
+    );
+  }
+  if (nonNumeric) {
+    warnings.push(`Onglet CONSO : ${nonNumeric} valeur(s) non numérique(s) dans Consommé/Fléché, traitées comme 0.`);
+  }
+
+  stats.consoRowsParsed = parsed;
+  stats.consoRowsKept = kept;
+  return result;
+}
+
+/* ----------------------------- BUDGET ----------------------------- */
+function extractBudget(ws, warnings, stats) {
+  const byService = new Map(); // service -> budgetDedie
+  if (!ws) {
+    warnings.push("Onglet « BUDGET » introuvable : le budget dédié sera considéré comme 0 pour tous les services.");
+    return byService;
+  }
+
+  const { cols, letters, headerRow } = resolveColumns(ws, {
+    service: (n) => n === 'pole' || n === 'service',
+    budget: (n) => /^b\s?20\d{2}$/.test(n) || n === 'budget' || n === 'budget dedie' || n === 'montant',
+  });
+  stats.budgetColumns = letters;
+  stats.budgetHeaderRow = headerRow;
+
+  if (cols.service == null) {
+    warnings.push('Onglet BUDGET : colonne service (« Pôle ») introuvable. Aucun budget dédié ne peut être rattaché.');
+    return byService;
+  }
+  if (cols.budget == null) {
+    warnings.push('Onglet BUDGET : colonne budget dédié introuvable (en-tête « B20xx »/« Budget »). Budget considéré comme 0.');
+  }
+
+  const unknownServices = new Set();
+  let parsed = 0;
+  let kept = 0;
+  let nonNumeric = 0;
+
+  ws.eachRow({ includeEmpty: false }, (row, rn) => {
+    if (rn <= headerRow) return;
+    parsed++;
+
+    const serviceRaw = cellValue(row.getCell(cols.service));
+    if (typeof serviceRaw !== 'string' || serviceRaw.trim() === '') return;
+    if (isTotalLabel(serviceRaw)) return;
+
+    const service = matchService(serviceRaw);
+    if (!service) { unknownServices.add(serviceRaw.trim()); return; }
+
+    let budget = 0;
+    if (cols.budget != null) {
+      const bRaw = cellValue(row.getCell(cols.budget));
+      const n = toNumber(bRaw);
+      if (n == null) { if (bRaw != null && String(bRaw).trim() !== '') nonNumeric++; }
+      else budget = n;
+    }
+
+    byService.set(service, (byService.get(service) || 0) + budget);
+    kept++;
+  });
+
+  if (unknownServices.size) {
+    warnings.push(
+      `Onglet BUDGET : ${unknownServices.size} valeur(s) de service hors liste blanche ignorée(s) — ${[...unknownServices].slice(0, 12).join(', ')}${unknownServices.size > 12 ? '…' : ''}.`
+    );
+  }
+  if (nonNumeric) {
+    warnings.push(`Onglet BUDGET : ${nonNumeric} valeur(s) non numérique(s) dans le budget dédié, traitées comme 0.`);
+  }
+
+  stats.budgetRowsParsed = parsed;
+  stats.budgetRowsKept = kept;
+  return byService;
+}
+
+/* ----------------------------- Agrégation ----------------------------- */
+/**
+ * @param {{getSheet:(n:string)=>any, allSheetNames:string[]}} data
+ */
+function aggregate(data) {
+  const warnings = [];
+  const stats = {};
+  const t0 = Date.now();
+
+  const consoWs = data.getSheet('CONSO');
+  const budgetWs = data.getSheet('BUDGET');
+
+  const conso = extractConso(consoWs, warnings, stats);
+  const budgetMap = extractBudget(budgetWs, warnings, stats);
+
+  // Services à afficher : autorisés présents dans CONSO OU BUDGET, ordre de la liste blanche.
+  const present = new Set([...conso.byService.keys(), ...budgetMap.keys()]);
+  const serviceNames = AUTHORIZED_SERVICES.filter((s) => present.has(s));
+
+  const detailsByService = new Map();
+  for (const g of conso.groups.values()) {
+    if (!detailsByService.has(g.service)) detailsByService.set(g.service, []);
+    detailsByService.get(g.service).push({
+      service: g.service,
+      partie: g.partie,
+      ensemble: g.ensemble,
+      detailLabel: g.detailLabel,
+      consomme: g.consomme,
+      fleche: g.fleche,
+      sourceRows: g.sourceRows,
+      resteADepenser: null, // non ventilable au niveau ligne
+    });
+  }
+  for (const arr of detailsByService.values()) {
+    arr.sort((a, b) => a.detailLabel.localeCompare(b.detailLabel, 'fr', { sensitivity: 'base' }));
+  }
+
+  const services = serviceNames.map((name) => {
+    const c = conso.byService.get(name) || { consomme: 0, fleche: 0 };
+    const budgetDedie = budgetMap.get(name) || 0;
+    const consomme = c.consomme;
+    const fleche = c.fleche;
+    const resteADepenser = budgetDedie - consomme - fleche;
+    const avancement = budgetDedie > 0 ? (consomme + fleche) / budgetDedie : null;
+
+    if (budgetDedie === 0 && (consomme > 0 || fleche > 0)) {
+      warnings.push(`Service « ${name} » : consommé/fléché présent sans budget dédié — avancement non calculable.`);
+    }
+    if (budgetDedie > 0 && consomme === 0 && fleche === 0) {
+      warnings.push(`Service « ${name} » : budget dédié sans aucun consommé ni fléché.`);
+    }
+
+    return {
+      service: name,
+      budgetDedie,
+      consomme,
+      fleche,
+      resteADepenser,
+      avancement,
+      isOverBudget: resteADepenser < 0,
+      lignesDetail: detailsByService.get(name) || [],
+    };
+  });
+
+  const global = services.reduce(
+    (acc, s) => {
+      acc.budgetDedie += s.budgetDedie;
+      acc.consomme += s.consomme;
+      acc.fleche += s.fleche;
+      return acc;
+    },
+    emptyTotals()
+  );
+  global.resteADepenser = global.budgetDedie - global.consomme - global.fleche;
+  global.avancement = global.budgetDedie > 0 ? (global.consomme + global.fleche) / global.budgetDedie : null;
+  global.isOverBudget = global.resteADepenser < 0;
+
+  if (services.length === 0) {
+    warnings.push('Aucun service autorisé détecté dans les onglets CONSO/BUDGET. Vérifiez la source du fichier et la liste blanche des services.');
+  }
+
+  const allSheets = data.allSheetNames || [];
+  stats.sheetsUsed = [consoWs && consoWs.name, budgetWs && budgetWs.name].filter(Boolean);
+  stats.sheetsIgnored = allSheets.filter((n) => !stats.sheetsUsed.includes(n));
+  stats.servicesDetected = services.length;
+  stats.authorizedServices = AUTHORIZED_SERVICES;
+  stats.aggregationMs = Date.now() - t0;
+
+  return { global, services, warnings, stats };
+}
+
+module.exports = { aggregate, AUTHORIZED_SERVICES, normalize, matchService };
