@@ -199,21 +199,33 @@ function extractConso(ws, warnings, stats) {
   }
 
   const { cols, letters, headerRow } = resolveColumns(ws, {
-    service: (n) => n === 'pole' || n === 'service',
-    partie: (n) => n === 'partie',
+    serviceSvc:  (n) => n === 'service',
+    servicePole: (n) => n === 'pole',
+    partie:   (n) => n === 'partie',
     ensemble: (n) => n === 'ensemble',
     consomme: (n) => n === 'consomme',
-    fleche: (n) => n === 'fleche',
+    fleche:   (n) => n === 'fleche',
   });
-  stats.consoColumns = letters;
+  // Prefer "Service" column (more granular); fall back to "Pôle" per row when Service is empty.
+  const svcCol  = cols.serviceSvc  ?? null;
+  const poleCol = cols.servicePole ?? null;
+  stats.consoColumns = {
+    service:         letters.serviceSvc  ?? letters.servicePole ?? null,
+    serviceFallback: svcCol != null ? (letters.servicePole ?? null) : null,
+    partie: letters.partie, ensemble: letters.ensemble,
+    consomme: letters.consomme, fleche: letters.fleche,
+  };
   stats.consoHeaderRow = headerRow;
 
-  for (const k of ['service', 'consomme', 'fleche']) {
+  if (svcCol == null && poleCol == null) {
+    warnings.push('Onglet CONSO : colonne service (« Service » ou « Pôle ») introuvable. Les valeurs seront ignorées.');
+    return result;
+  }
+  for (const k of ['consomme', 'fleche']) {
     if (cols[k] == null) {
       warnings.push(`Onglet CONSO : colonne « ${k} » introuvable (en-tête non détecté). Les valeurs correspondantes seront ignorées.`);
     }
   }
-  if (cols.service == null) return result;
 
   const unknownServices = new Set();
   const allServiceRawValues = new Set();
@@ -225,7 +237,11 @@ function extractConso(ws, warnings, stats) {
     if (rn <= headerRow) return;
     parsed++;
 
-    const serviceRaw = cols.service ? cellValue(row.getCell(cols.service)) : null;
+    // Service column first; fall back to Pôle if empty
+    const svcRaw  = svcCol  ? cellValue(row.getCell(svcCol))  : null;
+    const poleRaw = poleCol ? cellValue(row.getCell(poleCol)) : null;
+    const serviceRaw = (typeof svcRaw === 'string' && svcRaw.trim()) ? svcRaw : poleRaw;
+
     if (typeof serviceRaw !== 'string' || serviceRaw.trim() === '') return;
     if (isTotalLabel(serviceRaw)) return;
 
@@ -300,14 +316,22 @@ function extractBudget(ws, warnings, stats) {
   }
 
   const { cols, letters, headerRow } = resolveColumns(ws, {
-    service: (n) => n === 'pole' || n === 'service',
+    serviceSvc:  (n) => n === 'service',
+    servicePole: (n) => n === 'pole',
     budget: (n) => /^b\s?20\d{2}$/.test(n) || n === 'budget' || n === 'budget dedie' || n === 'montant',
   });
-  stats.budgetColumns = letters;
+  // Prefer "Service" column; fall back to "Pôle" per row when Service is empty.
+  const svcCol  = cols.serviceSvc  ?? null;
+  const poleCol = cols.servicePole ?? null;
+  stats.budgetColumns = {
+    service:         letters.serviceSvc  ?? letters.servicePole ?? null,
+    serviceFallback: svcCol != null ? (letters.servicePole ?? null) : null,
+    budget: letters.budget,
+  };
   stats.budgetHeaderRow = headerRow;
 
-  if (cols.service == null) {
-    warnings.push('Onglet BUDGET : colonne service (« Pôle ») introuvable. Aucun budget dédié ne peut être rattaché.');
+  if (svcCol == null && poleCol == null) {
+    warnings.push('Onglet BUDGET : colonne service (« Service » ou « Pôle ») introuvable. Aucun budget dédié ne peut être rattaché.');
     return byService;
   }
   if (cols.budget == null) {
@@ -324,7 +348,11 @@ function extractBudget(ws, warnings, stats) {
     if (rn <= headerRow) return;
     parsed++;
 
-    const serviceRaw = cellValue(row.getCell(cols.service));
+    // Service column first; fall back to Pôle if empty
+    const svcRaw  = svcCol  ? cellValue(row.getCell(svcCol))  : null;
+    const poleRaw = poleCol ? cellValue(row.getCell(poleCol)) : null;
+    const serviceRaw = (typeof svcRaw === 'string' && svcRaw.trim()) ? svcRaw : poleRaw;
+
     if (typeof serviceRaw !== 'string' || serviceRaw.trim() === '') return;
     if (isTotalLabel(serviceRaw)) return;
 
@@ -356,6 +384,7 @@ function extractBudget(ws, warnings, stats) {
 
   stats.budgetRowsParsed = parsed;
   stats.budgetRowsKept = kept;
+  stats.budgetServicesFoundRaw = [...allServiceRawValues].sort();
   return byService;
 }
 
