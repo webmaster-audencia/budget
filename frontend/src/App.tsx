@@ -24,7 +24,7 @@ function App() {
     catch { return {}; }
   });
   const [exporting, setExporting] = useState(false);
-  // Logo PDF : si /logo-audencia.png ne se charge pas, fallback texte « Audencia »
+  // Logo PDF : si /logo-audencia.JPG ne se charge pas, fallback texte « Audencia »
   // (le PDF capture le DOM, donc le fallback est inclus dans l'export).
   const [pdfLogoOk, setPdfLogoOk] = useState(true);
   const exportRef = useRef<HTMLDivElement>(null);
