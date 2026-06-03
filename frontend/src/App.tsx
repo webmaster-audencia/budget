@@ -149,7 +149,7 @@ function App() {
                   <div className="view-brand-pdf">
                     {pdfLogoOk ? (
                       <img
-                        src="/logo-audencia.png"
+                        src="/logo-audencia.JPG"
                         alt="Audencia"
                         className="pdf-logo"
                         onError={() => setPdfLogoOk(false)}
