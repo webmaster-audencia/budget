@@ -24,6 +24,9 @@ function App() {
     catch { return {}; }
   });
   const [exporting, setExporting] = useState(false);
+  // Logo PDF : si /logo-audencia.png ne se charge pas, fallback texte « Audencia »
+  // (le PDF capture le DOM, donc le fallback est inclus dans l'export).
+  const [pdfLogoOk, setPdfLogoOk] = useState(true);
   const exportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -144,7 +147,16 @@ function App() {
               <div ref={exportRef} className="export-capture">
                 <div className="view-header">
                   <div className="view-brand-pdf">
-                    <img src="/logo-audencia.svg" alt="Audencia" className="pdf-logo" />
+                    {pdfLogoOk ? (
+                      <img
+                        src="/logo-audencia.png"
+                        alt="Audencia"
+                        className="pdf-logo"
+                        onError={() => setPdfLogoOk(false)}
+                      />
+                    ) : (
+                      <div className="pdf-logo-fallback">Audencia</div>
+                    )}
                   </div>
                   <div className="view-title-wrap">
                     <div className="view-eyebrow">Direction de la Communication & Marketing</div>
@@ -193,8 +205,9 @@ function App() {
                 Source : {state.data.source}
                 {state.data.fileUpdatedAt && ` — fichier daté du ${formatDateFr(new Date(state.data.fileUpdatedAt))}`}
                 {' — '}{state.data.stats.servicesDetected} service(s) détecté(s)
-                {' · '}CONSO col.service={state.data.stats.consoColumns?.service ?? '?'}
-                {' · '}BUDGET col.service={state.data.stats.budgetColumns?.service ?? '?'}
+                {' · '}service={state.data.stats.consoColumns?.service ?? '?'}
+                {' · '}budget dédié={state.data.stats.consoColumns?.budgetDedie ?? '?'}
+                {' '}({state.data.stats.consoColumns?.budgetDedieSource === 'header' ? 'en-tête FORECAST' : 'repli colonne S'})
                 {' · '}cache {state.data.cacheUsed ? 'utilisé' : 'mis à jour'}.
               </div>
             </>

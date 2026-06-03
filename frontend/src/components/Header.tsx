@@ -9,14 +9,16 @@ export const Header = memo(function Header() {
       <div className="header-inner">
         <div className="brand">
           {logoOk ? (
+            // Logo PNG servi depuis frontend/public/logo-audencia.png → URL « /logo-audencia.png ».
+            // Si l'image ne se charge pas, fallback texte « Audencia » (slot ci-dessous).
             <img
-              src="/logo-audencia.svg"
+              src="/logo-audencia.png"
               alt="Audencia"
               className="brand-logo"
               onError={() => setLogoOk(false)}
             />
           ) : (
-            <div className="brand-logo-slot" aria-hidden="true">A</div>
+            <div className="brand-logo-slot" aria-hidden="true">Audencia</div>
           )}
           <div className="brand-text">
             <div className="brand-name">Audencia</div>

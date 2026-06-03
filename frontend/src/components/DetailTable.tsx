@@ -54,10 +54,10 @@ const ServiceRows = memo(function ServiceRows({
               {r.sourceRows > 1 && <span className="src-count"> ×{r.sourceRows}</span>}
             </td>
             <td className="detail-svc">{r.service}</td>
-            <td className="num muted">—</td>
+            <td className="num">{formatEUR(r.budgetDedie)}</td>
             <td className="num">{formatEUR(r.consomme)}</td>
             <td className="num">{formatEUR(r.fleche)}</td>
-            <td className="num muted">—</td>
+            <td className={resteClass(r.resteADepenser)}>{formatEUR(r.resteADepenser)}</td>
           </tr>
         ))}
 
@@ -106,8 +106,9 @@ export const DetailTable = memo(function DetailTable({ services, isGlobal, force
     <section className="detail-section">
       <h3 className="detail-title">Détail des dépenses</h3>
       <div className="detail-hint no-print">
-        Détail = <strong>Partie — Ensemble</strong> (onglet CONSO). Le budget dédié provient de l'onglet
-        BUDGET au niveau service ; il n'est pas ventilé par ligne (« — »).
+        Détail = <strong>Partie — Ensemble</strong> (onglet CONSO). Le budget dédié est sommé ligne par
+        ligne depuis la colonne <strong>FORECAST AU 2 JUIN - VIRGINIE</strong>. Reste à dépenser =
+        Budget dédié − Consommé − Fléché, coloré vert (≥ 0) ou rouge (&lt; 0).
         {isGlobal && ' Cliquez sur un service pour déplier son détail.'}
       </div>
       <div className="detail-table-wrap">

@@ -3,10 +3,11 @@ export interface DetailRow {
   partie: string;
   ensemble: string;
   detailLabel: string;
+  budgetDedie: number;
   consomme: number;
   fleche: number;
   sourceRows: number;
-  resteADepenser: number | null; // null = non ventilable au niveau ligne
+  resteADepenser: number;
 }
 
 export interface ServiceView {
@@ -27,6 +28,10 @@ export interface GlobalView {
   resteADepenser: number;
   avancement: number | null;
   isOverBudget: boolean;
+  totalBudgetDedie?: number;
+  totalConsomme?: number;
+  totalFleche?: number;
+  totalResteADepenser?: number;
 }
 
 export interface BudgetResponse {
@@ -40,13 +45,23 @@ export interface BudgetResponse {
   stats: {
     consoRowsParsed?: number;
     consoRowsKept?: number;
-    budgetRowsParsed?: number;
-    budgetRowsKept?: number;
-    consoColumns?: Record<string, string | null>;
-    budgetColumns?: Record<string, string | null>;
+    budgetDedieRowsWithValue?: number;
+    consoColumns?: {
+      service?: string | null;
+      partie?: string | null;
+      ensemble?: string | null;
+      consomme?: string | null;
+      fleche?: string | null;
+      budgetDedie?: string | null;
+      budgetDedieSource?: 'header' | 'fallbackS';
+    };
     sheetsUsed: string[];
     sheetsIgnored: string[];
     servicesDetected: number;
     aggregationMs?: number;
+    budgetDedieSampleRows?: Array<{
+      row: number; service: string; partie: string; ensemble: string;
+      budgetDedie: number; consomme: number; fleche: number; reste: number;
+    }>;
   };
 }
