@@ -30,12 +30,13 @@ async function getBudget() {
   const { label, version, fetchMs, fileUpdatedAt } = data;
   const { global, services, warnings, stats } = aggregate(data);
 
-  const budgetSrc = stats.consoColumns?.budgetDedieSource === 'header'
-    ? `header (col ${stats.consoColumns?.budgetDedie})`
-    : `fallback colonne S (col ${stats.consoColumns?.budgetDedie})`;
+  const budgetSrc = stats.budgetColumns?.budgetDedieSource === 'header'
+    ? `header (col ${stats.budgetColumns?.budgetDedie})`
+    : `fallback colonne S (col ${stats.budgetColumns?.budgetDedie})`;
   console.log(
-    `[budget] Excel parsed in ${fetchMs}ms — ${stats.sheetsUsed.length} sheet used ` +
-      `(${stats.sheetsUsed.join(', ') || 'none'}) — CONSO ${stats.consoRowsKept || 0}/${stats.consoRowsParsed || 0} kept — ` +
+    `[budget] Excel parsed in ${fetchMs}ms — ${stats.sheetsUsed.length} sheets used ` +
+      `(${stats.sheetsUsed.join(', ') || 'none'}) — CONSO ${stats.consoRowsKept || 0}/${stats.consoRowsParsed || 0} kept, ` +
+      `BUDGET ${stats.budgetRowsKept || 0}/${stats.budgetRowsParsed || 0} kept — ` +
       `budget dédié : ${budgetSrc}, ${stats.budgetDedieRowsWithValue || 0} ligne(s) avec valeur — ` +
       `${stats.servicesDetected} services — aggregated in ${stats.aggregationMs}ms — cache updated`
   );

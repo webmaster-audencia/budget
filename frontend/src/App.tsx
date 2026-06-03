@@ -205,9 +205,9 @@ function App() {
                 Source : {state.data.source}
                 {state.data.fileUpdatedAt && ` — fichier daté du ${formatDateFr(new Date(state.data.fileUpdatedAt))}`}
                 {' — '}{state.data.stats.servicesDetected} service(s) détecté(s)
-                {' · '}service={state.data.stats.consoColumns?.service ?? '?'}
-                {' · '}budget dédié={state.data.stats.consoColumns?.budgetDedie ?? '?'}
-                {' '}({state.data.stats.consoColumns?.budgetDedieSource === 'header' ? 'en-tête FORECAST' : 'repli colonne S'})
+                {' · '}CONSO service={state.data.stats.consoColumns?.service ?? '?'}
+                {' · '}BUDGET budget dédié={state.data.stats.budgetColumns?.budgetDedie ?? '?'}
+                {' '}({state.data.stats.budgetColumns?.budgetDedieSource === 'header' ? 'en-tête FORECAST' : 'repli colonne S'})
                 {' · '}cache {state.data.cacheUsed ? 'utilisé' : 'mis à jour'}.
               </div>
             </>

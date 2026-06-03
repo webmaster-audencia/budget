@@ -45,6 +45,8 @@ export interface BudgetResponse {
   stats: {
     consoRowsParsed?: number;
     consoRowsKept?: number;
+    budgetRowsParsed?: number;
+    budgetRowsKept?: number;
     budgetDedieRowsWithValue?: number;
     consoColumns?: {
       service?: string | null;
@@ -52,6 +54,11 @@ export interface BudgetResponse {
       ensemble?: string | null;
       consomme?: string | null;
       fleche?: string | null;
+    };
+    budgetColumns?: {
+      service?: string | null;
+      partie?: string | null;
+      ensemble?: string | null;
       budgetDedie?: string | null;
       budgetDedieSource?: 'header' | 'fallbackS';
     };
@@ -61,7 +68,7 @@ export interface BudgetResponse {
     aggregationMs?: number;
     budgetDedieSampleRows?: Array<{
       row: number; service: string; partie: string; ensemble: string;
-      budgetDedie: number; consomme: number; fleche: number; reste: number;
+      budgetDedie: number;
     }>;
   };
 }

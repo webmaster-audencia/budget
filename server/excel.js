@@ -1,28 +1,31 @@
 /**
  * Agrégation budgétaire — modèle de données 2026.
  *
- * SEUL l'onglet CONSO est lu pour alimenter le dashboard. Tous les autres
- * onglets sont ignorés (BUDGET inclus : son budget n'est plus utilisé, la
- * source du budget dédié est maintenant la colonne « FORECAST AU 2 JUIN
- * - VIRGINIE » de l'onglet CONSO).
+ * Deux onglets sont lus :
+ *   - CONSO  : Consommé et Fléché, ventilés par Service + Partie + Ensemble
+ *   - BUDGET : Budget dédié, ventilé par Service + Partie + Ensemble
  *
- * Colonnes résolues par EN-TÊTE (pas par lettre figée) pour rester robuste
- * aux variations de mise en page :
+ * Le tableau de détail = union des clés (Service+Partie+Ensemble) entre les
+ * deux onglets : chaque ligne agrège Consommé/Fléché depuis CONSO et Budget
+ * dédié depuis BUDGET. Les totaux par service et le total global sont la
+ * somme des lignes affichées.
  *
- *   CONSO  : Service      ← en-tête « Service » (sinon « Pôle »)
+ * Colonnes résolues par EN-TÊTE (pas par lettre figée) :
+ *
+ *   CONSO  : Service  ← en-tête « Service » (sinon « Pôle »)
+ *            Partie   ← « Partie »
+ *            Ensemble ← « Ensemble »
+ *            Consommé ← « CONSOMME »
+ *            Fléché   ← « FLECHE »
+ *
+ *   BUDGET : Service      ← en-tête « Service » (sinon « Pôle »)
  *            Partie       ← « Partie »
  *            Ensemble     ← « Ensemble »
- *            Consommé     ← « CONSOMME »
- *            Fléché       ← « FLECHE »
- *            Budget dédié ← « FORECAST AU 2 JUIN - VIRGINIE »
+ *            Budget dédié ← en-tête « FORECAST AU 2 JUIN - VIRGINIE »
  *                           (sinon repli sur la colonne S = index 19 ExcelJS)
  *
- * La colonne « Service » est prioritaire sur « Pôle » : si elle existe, elle
- * est la seule source du service et une ligne sans valeur y est ignorée.
- *
- * Budget dédié au niveau ligne, service et global : tout est sommé depuis
- * cette même colonne. Reste à dépenser = Budget dédié − Consommé − Fléché
- * à chaque niveau (ligne, service, global).
+ * Reste à dépenser = Budget dédié − Consommé − Fléché à chaque niveau
+ * (ligne, service, global). Coloré vert (≥ 0) ou rouge (< 0).
  *
  * Services : liste blanche stricte. Toute valeur hors liste est ignorée.
  */
@@ -187,16 +190,15 @@ function detailLabel(partie, ensemble) {
   return 'Non renseigné';
 }
 
-/* ----------------------------- CONSO ----------------------------- */
 // Colonne S = 19 en index ExcelJS (1-based, A=1). Equivaut à index 18 en 0-based.
 const FALLBACK_FORECAST_COL = 19;
 const FORECAST_HEADER_NORMALIZED = normalize('FORECAST AU 2 JUIN - VIRGINIE');
 
+/* ----------------------------- CONSO ----------------------------- */
 function extractConso(ws, warnings, stats) {
   const result = {
-    groups: new Map(),       // key → { service, partie, ensemble, detailLabel, budgetDedie, consomme, fleche, sourceRows }
-    byService: new Map(),    // service → { budgetDedie, consomme, fleche }
-    sampleRows: [],          // quelques lignes pour debug
+    groups: new Map(),       // key → { service, partie, ensemble, detailLabel, consomme, fleche, sourceRows }
+    byService: new Map(),    // service → { consomme, fleche }
   };
   if (!ws) {
     warnings.push("Onglet « CONSO » introuvable : aucun consommé ni fléché ne peut être calculé.");
@@ -210,35 +212,18 @@ function extractConso(ws, warnings, stats) {
     ensemble: (n) => n === 'ensemble',
     consomme: (n) => n === 'consomme',
     fleche:   (n) => n === 'fleche',
-    forecast: (n) => n === FORECAST_HEADER_NORMALIZED,
   });
 
-  // Service : « Service » prioritaire, « Pôle » à défaut.
   const serviceCol = cols.serviceSvc ?? cols.servicePole ?? null;
-
-  // Budget dédié : en-tête « FORECAST AU 2 JUIN - VIRGINIE » prioritaire,
-  // sinon repli sur colonne S (= 19 en 1-based ExcelJS).
-  const forecastByHeader = cols.forecast != null;
-  const forecastCol = forecastByHeader ? cols.forecast : FALLBACK_FORECAST_COL;
-  const forecastSource = forecastByHeader ? 'header' : 'fallbackS';
-  const forecastLetter = letters.forecast ?? COL_LETTERS[FALLBACK_FORECAST_COL];
-
   stats.consoColumns = {
     service:  letters.serviceSvc ?? letters.servicePole ?? null,
     partie: letters.partie,
     ensemble: letters.ensemble,
     consomme: letters.consomme,
     fleche: letters.fleche,
-    budgetDedie: forecastLetter,
-    budgetDedieSource: forecastSource,
   };
   stats.consoHeaderRow = headerRow;
 
-  if (!forecastByHeader) {
-    warnings.push(
-      `Onglet CONSO : en-tête « FORECAST AU 2 JUIN - VIRGINIE » introuvable. Repli sur la colonne S (${forecastLetter}, index ${FALLBACK_FORECAST_COL}) pour le budget dédié.`
-    );
-  }
   if (serviceCol == null) {
     warnings.push('Onglet CONSO : colonne service (« Service » ou « Pôle ») introuvable. Les valeurs seront ignorées.');
     return result;
@@ -253,8 +238,6 @@ function extractConso(ws, warnings, stats) {
   let parsed = 0;
   let kept = 0;
   let nonNumeric = 0;
-  let nonNumericBudget = 0;
-  let budgetSeen = 0;
 
   ws.eachRow({ includeEmpty: false }, (row, rn) => {
     if (rn <= headerRow) return;
@@ -265,10 +248,7 @@ function extractConso(ws, warnings, stats) {
     if (isTotalLabel(serviceRaw)) return;
 
     const service = matchService(serviceRaw);
-    if (!service) {
-      unknownServices.add(serviceRaw.trim());
-      return;
-    }
+    if (!service) { unknownServices.add(serviceRaw.trim()); return; }
 
     const partie = cols.partie ? cellValue(row.getCell(cols.partie)) : '';
     const ensemble = cols.ensemble ? cellValue(row.getCell(cols.ensemble)) : '';
@@ -277,53 +257,30 @@ function extractConso(ws, warnings, stats) {
 
     const cRaw = cols.consomme ? cellValue(row.getCell(cols.consomme)) : null;
     const fRaw = cols.fleche ? cellValue(row.getCell(cols.fleche)) : null;
-    const bRaw = cellValue(row.getCell(forecastCol));
 
     let consomme = toNumber(cRaw);
     let fleche = toNumber(fRaw);
-    let budgetDedie = toNumber(bRaw);
     if (consomme == null) { if (cRaw != null && String(cRaw).trim() !== '') nonNumeric++; consomme = 0; }
     if (fleche == null) { if (fRaw != null && String(fRaw).trim() !== '') nonNumeric++; fleche = 0; }
-    if (budgetDedie == null) {
-      if (bRaw != null && String(bRaw).trim() !== '') nonNumericBudget++;
-      budgetDedie = 0;
-    } else if (budgetDedie !== 0) {
-      budgetSeen++;
-    }
 
     const key = `${service}||${partieStr}||${ensembleStr}`;
     let g = result.groups.get(key);
     if (!g) {
       g = {
-        service,
-        partie: partieStr,
-        ensemble: ensembleStr,
+        service, partie: partieStr, ensemble: ensembleStr,
         detailLabel: detailLabel(partieStr, ensembleStr),
-        budgetDedie: 0,
-        consomme: 0,
-        fleche: 0,
-        sourceRows: 0,
+        consomme: 0, fleche: 0, sourceRows: 0,
       };
       result.groups.set(key, g);
     }
-    g.budgetDedie += budgetDedie;
     g.consomme += consomme;
     g.fleche += fleche;
     g.sourceRows += 1;
 
     let svc = result.byService.get(service);
-    if (!svc) { svc = { budgetDedie: 0, consomme: 0, fleche: 0 }; result.byService.set(service, svc); }
-    svc.budgetDedie += budgetDedie;
+    if (!svc) { svc = { consomme: 0, fleche: 0 }; result.byService.set(service, svc); }
     svc.consomme += consomme;
     svc.fleche += fleche;
-
-    if (result.sampleRows.length < 5 && budgetDedie !== 0) {
-      result.sampleRows.push({
-        row: rn, service, partie: partieStr, ensemble: ensembleStr,
-        budgetDedie, consomme, fleche,
-        reste: budgetDedie - consomme - fleche,
-      });
-    }
 
     kept++;
   });
@@ -336,21 +293,138 @@ function extractConso(ws, warnings, stats) {
   if (nonNumeric) {
     warnings.push(`Onglet CONSO : ${nonNumeric} valeur(s) non numérique(s) dans Consommé/Fléché, traitées comme 0.`);
   }
-  if (nonNumericBudget) {
-    warnings.push(`Onglet CONSO : ${nonNumericBudget} valeur(s) non numérique(s) dans le budget dédié (colonne ${forecastLetter}), traitées comme 0.`);
-  }
-  if (kept > 0 && budgetSeen === 0) {
-    warnings.push(`Onglet CONSO : aucune valeur numérique de budget dédié trouvée dans la colonne ${forecastLetter} (${forecastSource === 'header' ? 'en-tête FORECAST AU 2 JUIN - VIRGINIE' : 'repli colonne S'}). Le budget dédié sera 0 partout.`);
-  }
 
   stats.consoRowsParsed = parsed;
   stats.consoRowsKept = kept;
+  return result;
+}
+
+/* ----------------------------- BUDGET ----------------------------- */
+function extractBudget(ws, warnings, stats) {
+  const result = {
+    groups: new Map(),    // key → { service, partie, ensemble, detailLabel, budgetDedie }
+    byService: new Map(), // service → budgetDedie
+    sampleRows: [],
+  };
+  if (!ws) {
+    warnings.push("Onglet « BUDGET » introuvable : le budget dédié sera 0 pour tous les services.");
+    return result;
+  }
+
+  const { cols, letters, headerRow } = resolveColumns(ws, {
+    serviceSvc:  (n) => n === 'service',
+    servicePole: (n) => n === 'pole',
+    partie:   (n) => n === 'partie',
+    ensemble: (n) => n === 'ensemble',
+    forecast: (n) => n === FORECAST_HEADER_NORMALIZED,
+  });
+
+  const serviceCol = cols.serviceSvc ?? cols.servicePole ?? null;
+
+  // Budget dédié : en-tête « FORECAST AU 2 JUIN - VIRGINIE » prioritaire,
+  // sinon repli sur colonne S (= 19 en 1-based ExcelJS = index 18 en 0-based JS).
+  const forecastByHeader = cols.forecast != null;
+  const forecastCol = forecastByHeader ? cols.forecast : FALLBACK_FORECAST_COL;
+  const forecastSource = forecastByHeader ? 'header' : 'fallbackS';
+  const forecastLetter = letters.forecast ?? COL_LETTERS[FALLBACK_FORECAST_COL];
+
+  stats.budgetColumns = {
+    service: letters.serviceSvc ?? letters.servicePole ?? null,
+    partie: letters.partie,
+    ensemble: letters.ensemble,
+    budgetDedie: forecastLetter,
+    budgetDedieSource: forecastSource,
+  };
+  stats.budgetHeaderRow = headerRow;
+
+  if (!forecastByHeader) {
+    warnings.push(
+      `Onglet BUDGET : en-tête « FORECAST AU 2 JUIN - VIRGINIE » introuvable. Repli sur la colonne S (${forecastLetter}, index ${FALLBACK_FORECAST_COL}) pour le budget dédié.`
+    );
+  }
+  if (serviceCol == null) {
+    warnings.push('Onglet BUDGET : colonne service (« Service » ou « Pôle ») introuvable. Aucun budget dédié ne peut être rattaché.');
+    return result;
+  }
+
+  const unknownServices = new Set();
+  let parsed = 0;
+  let kept = 0;
+  let nonNumericBudget = 0;
+  let budgetSeen = 0;
+
+  ws.eachRow({ includeEmpty: false }, (row, rn) => {
+    if (rn <= headerRow) return;
+    parsed++;
+
+    const serviceRaw = cellValue(row.getCell(serviceCol));
+    if (typeof serviceRaw !== 'string' || serviceRaw.trim() === '') return;
+    if (isTotalLabel(serviceRaw)) return;
+
+    const service = matchService(serviceRaw);
+    if (!service) { unknownServices.add(serviceRaw.trim()); return; }
+
+    const partie = cols.partie ? cellValue(row.getCell(cols.partie)) : '';
+    const ensemble = cols.ensemble ? cellValue(row.getCell(cols.ensemble)) : '';
+    const partieStr = typeof partie === 'string' ? partie.trim() : '';
+    const ensembleStr = typeof ensemble === 'string' ? ensemble.trim() : '';
+
+    const bRaw = cellValue(row.getCell(forecastCol));
+    let budgetDedie = toNumber(bRaw);
+    if (budgetDedie == null) {
+      if (bRaw != null && String(bRaw).trim() !== '') nonNumericBudget++;
+      budgetDedie = 0;
+    } else if (budgetDedie !== 0) {
+      budgetSeen++;
+    }
+
+    const key = `${service}||${partieStr}||${ensembleStr}`;
+    let g = result.groups.get(key);
+    if (!g) {
+      g = {
+        service, partie: partieStr, ensemble: ensembleStr,
+        detailLabel: detailLabel(partieStr, ensembleStr),
+        budgetDedie: 0,
+      };
+      result.groups.set(key, g);
+    }
+    g.budgetDedie += budgetDedie;
+
+    result.byService.set(service, (result.byService.get(service) || 0) + budgetDedie);
+
+    if (result.sampleRows.length < 5 && budgetDedie !== 0) {
+      result.sampleRows.push({
+        row: rn, service, partie: partieStr, ensemble: ensembleStr, budgetDedie,
+      });
+    }
+
+    kept++;
+  });
+
+  if (unknownServices.size) {
+    warnings.push(
+      `Onglet BUDGET : ${unknownServices.size} valeur(s) de service hors liste blanche ignorée(s) — ${[...unknownServices].slice(0, 12).join(', ')}${unknownServices.size > 12 ? '…' : ''}.`
+    );
+  }
+  if (nonNumericBudget) {
+    warnings.push(`Onglet BUDGET : ${nonNumericBudget} valeur(s) non numérique(s) dans le budget dédié (colonne ${forecastLetter}), traitées comme 0.`);
+  }
+  if (kept > 0 && budgetSeen === 0) {
+    warnings.push(`Onglet BUDGET : aucune valeur numérique de budget dédié trouvée dans la colonne ${forecastLetter} (${forecastSource === 'header' ? 'en-tête FORECAST AU 2 JUIN - VIRGINIE' : 'repli colonne S'}). Le budget dédié sera 0 partout.`);
+  }
+
+  stats.budgetRowsParsed = parsed;
+  stats.budgetRowsKept = kept;
   stats.budgetDedieRowsWithValue = budgetSeen;
   return result;
 }
 
 /* ----------------------------- Agrégation ----------------------------- */
 /**
+ * Union des clés Service+Partie+Ensemble entre CONSO et BUDGET. Chaque ligne
+ * de détail agrège Consommé/Fléché depuis CONSO et Budget dédié depuis BUDGET.
+ * Les totaux par service et le total global sont la somme des lignes affichées.
+ *
  * @param {{getSheet:(n:string)=>any, allSheetNames:string[]}} data
  */
 function aggregate(data) {
@@ -359,38 +433,48 @@ function aggregate(data) {
   const t0 = Date.now();
 
   const consoWs = data.getSheet('CONSO');
+  const budgetWs = data.getSheet('BUDGET');
   const conso = extractConso(consoWs, warnings, stats);
+  const budget = extractBudget(budgetWs, warnings, stats);
 
-  // Services présents dans CONSO, dans l'ordre de la liste blanche.
-  const present = new Set(conso.byService.keys());
+  // Services présents dans CONSO ou BUDGET, dans l'ordre de la liste blanche.
+  const present = new Set([...conso.byService.keys(), ...budget.byService.keys()]);
   const serviceNames = AUTHORIZED_SERVICES.filter((s) => present.has(s));
 
-  // Lignes de détail = groupes Service + Partie + Ensemble, avec sommes
-  // ligne à ligne du Budget dédié, Consommé et Fléché.
+  // Union des clés de détail entre CONSO et BUDGET.
   const detailsByService = new Map();
-  for (const g of conso.groups.values()) {
-    if (!detailsByService.has(g.service)) detailsByService.set(g.service, []);
-    detailsByService.get(g.service).push({
-      service: g.service,
-      partie: g.partie,
-      ensemble: g.ensemble,
-      detailLabel: g.detailLabel,
-      budgetDedie: g.budgetDedie,
-      consomme: g.consomme,
-      fleche: g.fleche,
-      sourceRows: g.sourceRows,
-      resteADepenser: g.budgetDedie - g.consomme - g.fleche,
-    });
+  const allKeys = new Set([...conso.groups.keys(), ...budget.groups.keys()]);
+  for (const key of allKeys) {
+    const cg = conso.groups.get(key);
+    const bg = budget.groups.get(key);
+    const base = cg || bg;
+    const budgetDedie = bg ? bg.budgetDedie : 0;
+    const consomme = cg ? cg.consomme : 0;
+    const fleche = cg ? cg.fleche : 0;
+    const detail = {
+      service: base.service,
+      partie: base.partie,
+      ensemble: base.ensemble,
+      detailLabel: base.detailLabel,
+      budgetDedie,
+      consomme,
+      fleche,
+      sourceRows: cg ? cg.sourceRows : 0,
+      resteADepenser: budgetDedie - consomme - fleche,
+    };
+    if (!detailsByService.has(base.service)) detailsByService.set(base.service, []);
+    detailsByService.get(base.service).push(detail);
   }
   for (const arr of detailsByService.values()) {
     arr.sort((a, b) => a.detailLabel.localeCompare(b.detailLabel, 'fr', { sensitivity: 'base' }));
   }
 
+  // Totaux par service = somme des lignes affichées (cohérence visuelle stricte).
   const services = serviceNames.map((name) => {
-    const c = conso.byService.get(name) || { budgetDedie: 0, consomme: 0, fleche: 0 };
-    const budgetDedie = c.budgetDedie;
-    const consomme = c.consomme;
-    const fleche = c.fleche;
+    const lignes = detailsByService.get(name) || [];
+    const budgetDedie = lignes.reduce((a, l) => a + l.budgetDedie, 0);
+    const consomme   = lignes.reduce((a, l) => a + l.consomme, 0);
+    const fleche     = lignes.reduce((a, l) => a + l.fleche, 0);
     const resteADepenser = budgetDedie - consomme - fleche;
     const avancement = budgetDedie > 0 ? (consomme + fleche) / budgetDedie : null;
 
@@ -409,7 +493,7 @@ function aggregate(data) {
       resteADepenser,
       avancement,
       isOverBudget: resteADepenser < 0,
-      lignesDetail: detailsByService.get(name) || [],
+      lignesDetail: lignes,
     };
   });
 
@@ -432,15 +516,15 @@ function aggregate(data) {
   global.totalResteADepenser = global.resteADepenser;
 
   if (services.length === 0) {
-    warnings.push('Aucun service autorisé détecté dans l\'onglet CONSO. Vérifiez la source du fichier et la liste blanche des services.');
+    warnings.push('Aucun service autorisé détecté dans CONSO/BUDGET. Vérifiez la source du fichier et la liste blanche des services.');
   }
 
   const allSheets = data.allSheetNames || [];
-  stats.sheetsUsed = [consoWs && consoWs.name].filter(Boolean);
+  stats.sheetsUsed = [consoWs && consoWs.name, budgetWs && budgetWs.name].filter(Boolean);
   stats.sheetsIgnored = allSheets.filter((n) => !stats.sheetsUsed.includes(n));
   stats.servicesDetected = services.length;
   stats.authorizedServices = AUTHORIZED_SERVICES;
-  stats.budgetDedieSampleRows = conso.sampleRows;
+  stats.budgetDedieSampleRows = budget.sampleRows;
   stats.aggregationMs = Date.now() - t0;
 
   return { global, services, warnings, stats };
